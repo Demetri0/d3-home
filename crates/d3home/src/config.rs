@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::IpAddr;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,7 @@ pub struct Config {
     pub devices: Vec<Device>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Device {
     pub name: String,
     #[serde(default)]
@@ -34,6 +34,23 @@ pub struct Device {
     pub mac: String,
     pub token: String,
     pub cached: Option<Cached>,
+}
+
+/// Hand-written so the token never reaches a `{:?}`, `dbg!`, or log line: it
+/// is the key to the device. Every other field prints normally; `Config`'s
+/// derived `Debug` inherits this redaction automatically through `Vec<Device>`.
+impl std::fmt::Debug for Device {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Device")
+            .field("name", &self.name)
+            .field("aliases", &self.aliases)
+            .field("driver", &self.driver)
+            .field("model", &self.model)
+            .field("mac", &self.mac)
+            .field("token", &"<redacted>")
+            .field("cached", &self.cached)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +67,9 @@ pub enum ConfigError {
 
     #[error("cannot parse the config file: {0}")]
     Parse(String),
+
+    #[error("device '{name}' is declared more than once")]
+    DuplicateDevice { name: String },
 
     #[error("alias '{alias}' on device '{device}' collides with a built-in command")]
     ReservedAlias { alias: String, device: String },
@@ -81,14 +101,25 @@ impl Config {
         Ok(config)
     }
 
-    /// Check the three conflicts a device registry must never contain: an
-    /// alias that shadows a built-in command, an alias reused across two
-    /// devices, and an alias that collides with another device's name.
+    /// Check the four conflicts a device registry must never contain: two
+    /// devices sharing a name, an alias that shadows a built-in command, an
+    /// alias reused across two devices, and an alias that collides with
+    /// another device's name.
     ///
-    /// Reserved-word aliases are checked first, over every device, before any
-    /// duplicate/shadow check runs; which of two simultaneous violations is
-    /// reported first is otherwise unspecified and not meant to be relied on.
+    /// Duplicate device names are checked first, then reserved-word aliases
+    /// over every device, before any duplicate/shadow alias check runs;
+    /// which of two simultaneous violations is reported first is otherwise
+    /// unspecified and not meant to be relied on.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        let mut seen_names: HashSet<&str> = HashSet::new();
+        for device in &self.devices {
+            if !seen_names.insert(device.name.as_str()) {
+                return Err(ConfigError::DuplicateDevice {
+                    name: device.name.clone(),
+                });
+            }
+        }
+
         for device in &self.devices {
             for alias in &device.aliases {
                 if RESERVED.contains(&alias.as_str()) {
@@ -135,24 +166,44 @@ impl Config {
 
     /// Write the registry to `path` with owner-only permissions: it holds
     /// device tokens. Creates the parent directory if it does not exist yet.
+    ///
+    /// Writes to a temp file created directly with mode 0600 in the same
+    /// directory as `path`, then renames it over the target. `mode()` on
+    /// `OpenOptions` only governs permissions at *creation*, so overwriting
+    /// an existing file in place would write the fresh token to disk before
+    /// a follow-up chmod ever ran, briefly exposing it under the old file's
+    /// permissions. The rename is atomic on the same filesystem, so a reader
+    /// never observes a half-written config either.
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)?;
 
         let text = toml::to_string_pretty(self).map_err(|e| ConfigError::Parse(e.to_string()))?;
 
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        file.write_all(text.as_bytes())?;
-        // Belt and suspenders: `mode()` above only applies when the file is
-        // freshly created, so pin the permissions explicitly in case a file
-        // from a previous, looser-permissioned run is still sitting there.
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("devices.toml");
+        let tmp_path = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
+
+        let write_result: Result<(), ConfigError> = (|| {
+            let mut tmp_file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp_path)?;
+            tmp_file.write_all(text.as_bytes())?;
+            tmp_file.sync_all()?;
+            Ok(())
+        })();
+
+        if let Err(err) = write_result {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(err);
+        }
+
+        std::fs::rename(&tmp_path, path)?;
 
         Ok(())
     }
@@ -255,6 +306,16 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
     }
 
     #[test]
+    fn refuses_two_devices_with_the_same_name() {
+        // Otherwise `resolve("kettle")` would silently return whichever
+        // device happens to come first in the Vec.
+        let toml = format!(
+            "{KETTLE}\n[[devices]]\nname = \"kettle\"\naliases = []\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"a0a1a2a3a4a5a6a7a8a9aaabacadaeaf\"\n"
+        );
+        assert!(matches!(parse(&toml), Err(ConfigError::DuplicateDevice { .. })));
+    }
+
+    #[test]
     // The brief's assertion form (`matches!(.., Err(_))`) is kept verbatim;
     // clippy would rather see `.is_err()`.
     #[allow(clippy::redundant_pattern_matching)]
@@ -283,5 +344,75 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
         assert_eq!(mode & 0o777, 0o600, "the file holds a device secret");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fixes_permissions_on_a_pre_existing_config_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("d3home-test-overwrite-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+
+        std::fs::write(&path, "stale = true\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        parse(KETTLE).unwrap().save(&path).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "overwriting an existing file must not keep its looser permissions"
+        );
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("kettle"), "the new config must actually be written");
+        assert!(!contents.contains("stale"), "the old contents must be replaced");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn leaves_the_existing_file_untouched_when_the_write_cannot_be_atomic() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("d3home-test-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(&path, "original").unwrap();
+
+        // Deny writes to the directory itself: the file can still be opened
+        // and truncated in place, but a fresh temp file cannot be created
+        // alongside it. A save that writes-then-renames must fail outright
+        // here rather than falling back to an in-place truncate that would
+        // briefly expose the new token under the old, looser permissions.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = parse(KETTLE).unwrap().save(&path);
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(result.is_err(), "save must fail rather than write in place");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "original",
+            "a failed save must not have touched the existing file"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn redacts_the_token_when_debug_formatted() {
+        let config = parse(KETTLE).unwrap();
+        let device = config.resolve("kettle").unwrap();
+
+        let debug = format!("{device:?}");
+
+        assert!(
+            !debug.contains(&device.token),
+            "Debug output must never contain the raw token: {debug}"
+        );
     }
 }
