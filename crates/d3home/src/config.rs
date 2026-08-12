@@ -59,6 +59,12 @@ pub enum ConfigError {
     #[error("cannot access the config file: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Deliberately just a message plus, when available, a line/column --
+    /// never the raw `toml` error's `Display`. `toml`'s own error message
+    /// quotes the offending source line verbatim, and the offending line
+    /// can be a malformed `token = "..."`; echoing that would print a
+    /// device secret to whatever reads this error (a terminal, a log, shell
+    /// history). See `parse_error` below, the only place this is built.
     #[error("cannot parse the config file: {0}")]
     Parse(String),
 
@@ -89,8 +95,7 @@ impl Config {
     /// Load and validate the registry from `path`.
     pub fn load(path: &Path) -> Result<Config, ConfigError> {
         let text = std::fs::read_to_string(path)?;
-        let config: Config =
-            toml::from_str(&text).map_err(|e| ConfigError::Parse(e.to_string()))?;
+        let config: Config = toml::from_str(&text).map_err(|e| parse_error(&e, &text))?;
         config.validate()?;
         Ok(config)
     }
@@ -244,6 +249,36 @@ impl Device {
     }
 }
 
+/// Turn a `toml` parse failure into a [`ConfigError::Parse`] that carries
+/// only `toml`'s own structured message plus a computed line/column --
+/// never `toml::de::Error`'s `Display`, which quotes the offending source
+/// line (see the doc comment on [`ConfigError::Parse`]).
+fn parse_error(err: &toml::de::Error, source: &str) -> ConfigError {
+    let message = match err.span() {
+        Some(span) => {
+            let (line, column) = line_col(source, span.start);
+            format!("{} (line {line}, column {column})", err.message())
+        }
+        None => err.message().to_string(),
+    };
+    ConfigError::Parse(message)
+}
+
+/// 1-based line and column of the byte offset `at` within `source`.
+fn line_col(source: &str, at: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut column = 1;
+    for ch in source[..at.min(source.len())].chars() {
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +365,32 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
 
         let bad = KETTLE.replace("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf", "nothex");
         assert!(matches!(parse(&bad).unwrap().resolve("k").unwrap().token_bytes(), Err(_)));
+    }
+
+    #[test]
+    fn a_malformed_token_line_never_echoes_into_the_parse_error() {
+        // An unterminated string is a TOML *syntax* error, not one this
+        // crate's own validation catches -- exactly the kind of failure
+        // where `toml`'s own `Display` would quote the source line
+        // containing the token.
+        let token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf";
+        let malformed = KETTLE.replace(&format!("token = \"{token}\""), &format!("token = \"{token}"));
+
+        let dir = std::env::temp_dir().join(format!("d3home-test-parse-error-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(&path, &malformed).unwrap();
+
+        let err = Config::load(&path).unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(
+            !rendered.contains(token),
+            "the malformed token must never be echoed into an error message: {rendered}"
+        );
+        assert!(matches!(err, ConfigError::Parse(_)));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

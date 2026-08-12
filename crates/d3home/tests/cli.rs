@@ -6,8 +6,15 @@ mod support {
 
     /// Write a config pointing at a simulator, with the endpoint pre-cached so
     /// the CLI never touches mDNS during tests.
+    ///
+    /// The directory is named after both the test process's pid and the
+    /// simulator's port: pid alone is not enough, because cargo's default
+    /// test harness runs every `#[test]` in this file as a thread within
+    /// one process, so all of them share a pid. Each `KettleSimulator`
+    /// binds `127.0.0.1:0`, so the port is unique per test regardless.
     pub fn config_with(addr: std::net::SocketAddr, public_key: &str, token: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("d3home-cli-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("d3home-cli-{}-{}", std::process::id(), addr.port()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         std::fs::write(
@@ -69,6 +76,89 @@ fn an_alias_works_exactly_like_the_device_name() {
 
     assert_eq!(handle.state().mode, syncleo::codec::command::PowerMode::On);
     handle.shutdown();
+}
+
+#[test]
+fn off_turns_the_kettle_off() {
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "kettle", "start"])
+        .assert()
+        .success();
+    assert_eq!(handle.state().mode, syncleo::codec::command::PowerMode::On);
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "kettle", "off"])
+        .assert()
+        .success();
+
+    assert_eq!(handle.state().mode, syncleo::codec::command::PowerMode::Off);
+    handle.shutdown();
+}
+
+#[test]
+fn the_device_flag_is_equivalent_to_the_positional_device_word() {
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "--device", "kettle", "start"])
+        .assert()
+        .success();
+
+    assert_eq!(handle.state().mode, syncleo::codec::command::PowerMode::On);
+    handle.shutdown();
+}
+
+#[test]
+fn watch_streams_events_as_they_arrive() {
+    use assert_cmd::prelude::*;
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+
+    // `watch` runs until the connection drops or the process is killed, so
+    // this can't use `assert_cmd`'s `.assert()`, which waits for the
+    // process to exit on its own. Spawn the binary directly, read one line
+    // off its stdout pipe (with a bounded wait, so a regression that makes
+    // `watch` stop streaming fails the test instead of hanging it), then
+    // kill it. That's enough to prove events are pushed out as they arrive
+    // rather than only buffered until exit.
+    let mut child = std::process::Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "watch"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("d3home watch should spawn");
+
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let _ = reader.read_line(&mut line);
+        let _ = tx.send(line);
+    });
+
+    let received = rx.recv_timeout(Duration::from_secs(5));
+
+    child.kill().ok();
+    let _ = child.wait();
+    handle.shutdown();
+
+    let line = received.expect("watch should print an event within 5 seconds");
+    assert!(!line.trim().is_empty(), "watch printed an empty line");
+    let _: serde_json::Value =
+        serde_json::from_str(line.trim()).expect("each watch line is a JSON event");
 }
 
 #[test]

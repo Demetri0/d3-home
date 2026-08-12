@@ -80,10 +80,13 @@ pub fn parse(args: &[String]) -> Result<Parsed, UsageError> {
         "devices" => Ok(Parsed::Builtin(Builtin::Devices)),
         "help" => Ok(Parsed::Builtin(Builtin::Help)),
         "alias" => parse_alias(rest),
-        // RESERVED is the single source of truth for built-in names; adding
-        // a new one there without a matching arm here is a compile-time
-        // gap, not a runtime one -- caught by the exhaustiveness of this
-        // match against the four arms above plus this one.
+        // RESERVED is the single source of truth for built-in names, but
+        // it's a runtime slice with no compiler-enforced link to the arms
+        // above: nothing stops someone from adding a word to RESERVED
+        // without adding a matching arm here. This panics rather than
+        // silently treating an unrecognized reserved word as a device name,
+        // so that gap fails loudly (in the test suite, at the latest)
+        // instead of quietly shadowing a command that was meant to exist.
         other => unreachable!("'{other}' is in RESERVED but has no parser"),
     }
 }

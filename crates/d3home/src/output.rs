@@ -68,6 +68,14 @@ pub fn print_event(event: &Event, json: bool) {
     } else {
         println!("{}", event_human(event));
     }
+    // `watch` is meant to be piped (into a notifier, a log, `jq`, ...), and
+    // stdout is block-buffered rather than line-buffered once it isn't a
+    // terminal. Without an explicit flush here, a consumer reading the pipe
+    // could stall waiting for output that is sitting in this process's
+    // buffer -- exactly the kind of thing that turns "a stream" into "a
+    // stream that only delivers on exit."
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
 }
 
 fn event_json(event: &Event) -> serde_json::Value {
