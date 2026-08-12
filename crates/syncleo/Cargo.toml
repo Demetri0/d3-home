@@ -3,6 +3,13 @@ name = "syncleo"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["simulator"]
+# The device side of the protocol, in-process. Off by default for consumers
+# that only need to talk to a real kettle (see Task 11); on by default here
+# so `cargo test -p syncleo` exercises the loopback tests out of the box.
+simulator = []
+
 [dependencies]
 aes = "0.9.2"
 cbc = "0.2.1"

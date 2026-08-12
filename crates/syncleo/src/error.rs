@@ -17,3 +17,17 @@ pub enum CodecError {
     #[error("command {ty} carries {len} bytes, which is not a valid length")]
     BadCommandLength { ty: u8, len: usize },
 }
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("device did not respond in time")]
+    Timeout,
+    #[error("device rejected the handshake; the token is probably wrong")]
+    HandshakeRejected,
+    #[error("connection lost: no traffic from the device")]
+    Silence,
+    #[error(transparent)]
+    Codec(#[from] CodecError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
