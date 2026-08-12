@@ -30,4 +30,10 @@ pub enum Error {
     Codec(#[from] CodecError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error("device advertises curve {curve} protocol {protocol}, which this client was not written for")]
+    UnsupportedProtocol { curve: u8, protocol: u16 },
+    #[error("service record has no usable address (only link-local addresses, or none at all)")]
+    NoUsableAddress,
+    #[error("malformed mDNS service record: {0}")]
+    BadServiceRecord(String),
 }
