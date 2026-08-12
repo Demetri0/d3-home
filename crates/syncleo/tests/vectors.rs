@@ -87,3 +87,23 @@ proptest::proptest! {
         proptest::prop_assert_eq!(back, body);
     }
 }
+
+#[test]
+fn builds_the_reference_handshake_frame() {
+    use syncleo::codec::handshake::handshake_frame;
+
+    let our_public: [u8; 32] = core::array::from_fn(|i| i as u8);
+    let token: [u8; 16] = unhex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf").try_into().unwrap();
+
+    let frame = handshake_frame(&keys(), 0x01, &our_public, &token);
+
+    assert_eq!(
+        frame.to_bytes(),
+        unhex(concat!(
+            "01013100",
+            "00",
+            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+            "3a5eb8fc7284be1035c8c6dc6c30aafa",
+        )),
+    );
+}
