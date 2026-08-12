@@ -111,6 +111,27 @@ fn resends_an_unacknowledged_command_then_gives_up() {
 }
 
 #[test]
+fn declares_the_connection_lost_when_a_command_exhausts_its_attempts() {
+    let (mut session, _) = start();
+    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
+
+    session.request(Command::Mode(PowerMode::On), Millis(100));
+
+    let mut now = 100u64;
+    let mut actions = Vec::new();
+    for _ in 0..5 {
+        now += 1000;
+        actions = session.step(Input::Tick, Millis(now));
+    }
+
+    assert!(
+        actions.iter().any(|a| matches!(a, Action::Lost(LostReason::Unacknowledged))),
+        "five unacknowledged attempts must declare the connection lost"
+    );
+    assert!(!session.is_connected());
+}
+
+#[test]
 fn pings_every_three_seconds() {
     let (mut session, _) = start();
     session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(0));

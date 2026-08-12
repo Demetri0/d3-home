@@ -34,10 +34,15 @@ pub enum Input {
 /// Why the session declared the connection lost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LostReason {
-    /// No incoming packet at all for `SILENCE_TIMEOUT_MS`.
+    /// No incoming packet at all for `SILENCE_TIMEOUT_MS`: the device stopped
+    /// talking to us entirely.
     Silence,
     /// The device answered our handshake with a `Nak`: it rejected our token.
     HandshakeRejected,
+    /// An outgoing `Cmd` frame exhausted all `MAX_ATTEMPTS` retries without an
+    /// `Ack`. Distinct from `Silence`: the device may still be sending its own
+    /// frames, it has simply stopped acknowledging ours.
+    Unacknowledged,
 }
 
 /// Something the session wants the caller to do.
@@ -123,6 +128,9 @@ impl Session {
     }
 
     /// Send a command to the device, tracked for resend until acknowledged.
+    ///
+    /// If a previous command is still awaiting its `Ack`, it is silently
+    /// replaced: only the most recent request is tracked.
     pub fn request(&mut self, cmd: Command, now: Millis) -> Vec<Action> {
         if self.dead {
             return Vec::new();
@@ -205,17 +213,25 @@ impl Session {
             return vec![Action::Lost(LostReason::Silence)];
         }
 
+        if let Some(pending) = &self.pending
+            && now.0.saturating_sub(pending.sent_at.0) >= RESEND_INTERVAL_MS
+            && pending.attempts >= MAX_ATTEMPTS
+        {
+            // Retries are exhausted: the device has stopped acknowledging us,
+            // even if it is still sending its own frames. Treat this as a
+            // lost connection rather than freezing the outgoing slot forever
+            // — a frozen slot would silently disable the ping heartbeat for
+            // the rest of the session's life with no signal to the caller.
+            self.dead = true;
+            self.connected = false;
+            self.pending = None;
+            return vec![Action::Lost(LostReason::Unacknowledged)];
+        }
+
         let mut actions = Vec::new();
 
         if let Some(pending) = &mut self.pending {
-            // A pending frame occupies the outgoing slot until it is acked or
-            // its retries run out; while it does, no ping is scheduled. This
-            // is deliberate: a maxed-out command should not free the slot for
-            // a ping to sneak into, since that ping would itself need
-            // tracking and retries just like anything else we send.
-            if now.0.saturating_sub(pending.sent_at.0) >= RESEND_INTERVAL_MS
-                && pending.attempts < MAX_ATTEMPTS
-            {
+            if now.0.saturating_sub(pending.sent_at.0) >= RESEND_INTERVAL_MS {
                 actions.push(Action::Send(pending.bytes.clone()));
                 pending.sent_at = now;
                 pending.attempts += 1;

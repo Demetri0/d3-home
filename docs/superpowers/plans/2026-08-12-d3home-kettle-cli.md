@@ -1066,7 +1066,7 @@ git commit -m "Build the handshake frame"
   - `pub struct Millis(pub u64)` — монотонное время, передаётся снаружи
   - `pub enum Input { Packet(Vec<u8>), Tick }`
   - `pub enum Action { Send(Vec<u8>), Emit(Event), Connected, Lost(LostReason) }`
-  - `pub enum LostReason { Silence, HandshakeRejected }`
+  - `pub enum LostReason { Silence, HandshakeRejected, Unacknowledged }`
   - `pub struct Session`
   - `Session::new(our_private: [u8; 32], device_public_wire: [u8; 32], token: [u8; 16], now: Millis) -> (Session, Vec<Action>)` — сразу возвращает `Action::Send` с рукопожатием
   - `Session::step(&mut self, input: Input, now: Millis) -> Vec<Action>`
