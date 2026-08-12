@@ -203,7 +203,15 @@ impl Config {
             return Err(err);
         }
 
-        std::fs::rename(&tmp_path, path)?;
+        if let Err(err) = std::fs::rename(&tmp_path, path) {
+            // The temp file already holds a full copy of the fresh token; a
+            // failed rename must not leave it sitting in the config
+            // directory. If cleanup itself fails, that's swallowed — the
+            // caller needs to see why the rename failed, not why the
+            // cleanup did.
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(err.into());
+        }
 
         Ok(())
     }
@@ -398,6 +406,37 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
             std::fs::read_to_string(&path).unwrap(),
             "original",
             "a failed save must not have touched the existing file"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn removes_the_temp_file_when_the_rename_itself_fails() {
+        let dir = std::env::temp_dir().join(format!("d3home-test-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        // A regular file cannot be renamed onto an existing directory
+        // (POSIX rename fails with EISDIR), so putting a directory at the
+        // target path forces `rename` itself to fail *after* the temp file
+        // has already been created, written, and synced -- unlike
+        // `leaves_the_existing_file_untouched_when_the_write_cannot_be_atomic`,
+        // which denies directory-write permission and so fails earlier, at
+        // temp-file creation, never reaching rename at all.
+        std::fs::create_dir(&path).unwrap();
+
+        let result = parse(KETTLE).unwrap().save(&path);
+
+        assert!(result.is_err(), "save must fail when the rename fails");
+
+        let leftover_names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name != path.file_name().unwrap())
+            .collect();
+        assert!(
+            leftover_names.is_empty(),
+            "the temp file holding the fresh token must not be left behind: {leftover_names:?}"
         );
 
         std::fs::remove_dir_all(&dir).ok();
