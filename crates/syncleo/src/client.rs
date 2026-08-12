@@ -17,17 +17,15 @@ use crate::transport::Transport;
 /// enough to stay responsive, long enough to not busy-loop.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// How long `send` pumps the transport before returning.
+/// The overall deadline `send` gives a command to be acknowledged.
 ///
-/// The session does not surface acknowledgements as an `Action` — an `Ack`
-/// silently clears the resend queue internally — so there is no explicit
-/// "your command was applied" signal for the client to wait for. This fixed
-/// grace period gives a loopback round trip far more time than it needs
-/// while keeping calls fast. A command that only fails much later (all five
-/// resend attempts exhausted, several seconds out) is not reported by this
-/// call; it surfaces the next time something drives the session and hits
-/// `Action::Lost` — the next `send`, `collect_state`, or `watch`.
-const SEND_SETTLE: Duration = Duration::from_millis(300);
+/// The session resends an unacknowledged `Cmd` every `RESEND_INTERVAL_MS`
+/// (1s) and gives up after `MAX_ATTEMPTS` (5) attempts — roughly four to
+/// five seconds from the first send to `Action::Lost(Unacknowledged)`. This
+/// deadline must comfortably outlast that so a genuinely lost command
+/// surfaces as the session's own give-up (a specific `Error`) rather than as
+/// a premature, less informative client timeout.
+const SEND_DEADLINE: Duration = Duration::from_secs(8);
 
 fn lost_to_error(reason: LostReason) -> Error {
     match reason {
@@ -116,24 +114,25 @@ impl Client {
         }
     }
 
-    /// Send a command to the device and wait a fixed settle period for the
-    /// round trip. See [`SEND_SETTLE`] for why this is a grace period
-    /// rather than a wait for an explicit acknowledgement.
+    /// Send a command to the device and block until it is acknowledged, the
+    /// connection is declared lost, or [`SEND_DEADLINE`] elapses.
     pub fn send(&mut self, cmd: Command) -> Result<(), Error> {
         let now = self.now();
         let actions = self.session.request(cmd, now);
         self.perform(&actions)?;
 
-        let deadline = Instant::now() + SEND_SETTLE;
+        let deadline = Instant::now() + SEND_DEADLINE;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Ok(());
+                return Err(Error::Timeout);
             }
             let actions = self.pump(remaining)?;
             for action in &actions {
-                if let Action::Lost(reason) = action {
-                    return Err(lost_to_error(*reason));
+                match action {
+                    Action::Acked(_) => return Ok(()),
+                    Action::Lost(reason) => return Err(lost_to_error(*reason)),
+                    _ => {}
                 }
             }
         }

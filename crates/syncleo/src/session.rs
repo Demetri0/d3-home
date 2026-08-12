@@ -54,6 +54,11 @@ pub enum Action {
     Emit(Event),
     /// The handshake completed; the session is now connected.
     Connected,
+    /// An outgoing `Cmd` frame we were tracking as pending was acknowledged,
+    /// carrying the sequence number the device acked. There is only ever one
+    /// pending frame at a time, so a caller does not need to correlate this
+    /// against anything to know it is theirs.
+    Acked(u8),
     /// The session is done; no more actions will follow until a new one is built.
     Lost(LostReason),
 }
@@ -181,6 +186,7 @@ impl Session {
                     && pending.seq == frame.head.seq
                 {
                     self.pending = None;
+                    actions.push(Action::Acked(frame.head.seq));
                 }
             }
             FrameType::Cmd => {

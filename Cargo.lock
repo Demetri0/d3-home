@@ -438,6 +438,7 @@ dependencies = [
  "cipher",
  "proptest",
  "sha2",
+ "syncleo",
  "thiserror",
  "x25519-dalek",
 ]

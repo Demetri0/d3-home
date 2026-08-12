@@ -61,6 +61,11 @@ impl Transport for UdpTransport {
 /// this round" rather than a fatal transport error. From the caller's point
 /// of view both mean the same thing: keep waiting, or give up once its own
 /// deadline elapses.
+///
+/// Note: swallowing the ICMP error here means a persistently unreachable
+/// peer on some platforms could make `recv` return `Ok(None)` immediately
+/// on every call instead of actually waiting out `timeout`, turning the
+/// caller's poll loop into a busy loop until its own deadline elapses.
 fn is_no_data(e: &std::io::Error) -> bool {
     use std::io::ErrorKind::*;
     matches!(e.kind(), WouldBlock | TimedOut | ConnectionRefused | ConnectionReset)

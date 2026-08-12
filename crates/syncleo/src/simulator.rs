@@ -59,6 +59,7 @@ pub struct KettleHandle {
     pub addr: SocketAddr,
     pub public_wire: [u8; 32],
     state: Arc<Mutex<SimulatedState>>,
+    ignore_commands: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -68,6 +69,15 @@ impl KettleHandle {
     /// while the simulator is running: it is read from a shared lock.
     pub fn state(&self) -> SimulatedState {
         *self.state.lock().expect("simulator state lock poisoned")
+    }
+
+    /// From now on, silently drop every `Cmd` frame from an established
+    /// peer instead of acknowledging it: no `Ack`, no state change. The
+    /// handshake itself is unaffected. Exists so tests can pin what happens
+    /// when a command is genuinely never delivered, without needing a
+    /// separate device that is merely unreachable.
+    pub fn ignore_commands(&self) {
+        self.ignore_commands.store(true, Ordering::SeqCst);
     }
 
     /// Stop the simulator thread and wait for it to exit.
@@ -107,18 +117,21 @@ impl KettleSimulator {
             current: 20,
             water: true,
         }));
+        let ignore_commands = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
 
         let thread = {
             let state = state.clone();
+            let ignore_commands = ignore_commands.clone();
             let stop = stop.clone();
-            thread::spawn(move || run(socket, token, state, stop))
+            thread::spawn(move || run(socket, token, state, ignore_commands, stop))
         };
 
         Ok(KettleHandle {
             addr,
             public_wire: public_wire(&DEVICE_PRIVATE),
             state,
+            ignore_commands,
             stop,
             thread: Some(thread),
         })
@@ -133,7 +146,13 @@ struct Peer {
     keys: SessionKeys,
 }
 
-fn run(socket: UdpSocket, token: [u8; 16], state: Arc<Mutex<SimulatedState>>, stop: Arc<AtomicBool>) {
+fn run(
+    socket: UdpSocket,
+    token: [u8; 16],
+    state: Arc<Mutex<SimulatedState>>,
+    ignore_commands: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+) {
     let mut peer: Option<Peer> = None;
     let mut buf = [0u8; 2048];
 
@@ -147,7 +166,11 @@ fn run(socket: UdpSocket, token: [u8; 16], state: Arc<Mutex<SimulatedState>>, st
         let Ok(frame) = Frame::parse(&buf[..n]) else { continue };
 
         match &peer {
-            Some(p) if p.addr == from => handle_established(&socket, p, &frame, &state),
+            Some(p) if p.addr == from => {
+                if !ignore_commands.load(Ordering::SeqCst) {
+                    handle_established(&socket, p, &frame, &state);
+                }
+            }
             _ => handle_handshake(&socket, from, &frame, token, &mut peer, &state),
         }
     }

@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["simulator"]
-# The device side of the protocol, in-process. Off by default for consumers
-# that only need to talk to a real kettle (see Task 11); on by default here
-# so `cargo test -p syncleo` exercises the loopback tests out of the box.
+default = []
+# The device side of the protocol, in-process. Off by default: a production
+# binary that only needs to talk to a real kettle (see Task 11) has no
+# business compiling the simulator's thread and socket machinery. Enabled
+# below as a self-referencing dev-dependency so the crate's own test suite
+# still exercises it with no extra flags.
 simulator = []
 
 [dependencies]
@@ -20,3 +22,4 @@ x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 
 [dev-dependencies]
 proptest = "1.11.0"
+syncleo = { path = ".", features = ["simulator"] }
