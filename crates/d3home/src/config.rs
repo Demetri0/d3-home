@@ -1,11 +1,5 @@
 //! The device registry: user-defined devices and their aliases, loaded from
 //! and saved to a TOML file. See `default_path` for where that file lives.
-//!
-//! This module's public API is exercised by its own test suite; main.rs does
-//! not wire it into a CLI yet (that is Task 11), so some items have no
-//! caller within this crate today. Silence the resulting dead-code warnings
-//! rather than inventing premature CLI behaviour to use them.
-#![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
