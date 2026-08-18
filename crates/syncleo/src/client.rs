@@ -45,7 +45,7 @@ pub struct DeviceState {
     pub current_temperature: Option<u8>,
     pub target_temperature: Option<u8>,
     pub mode: Option<PowerMode>,
-    pub water_present: Option<bool>,
+    pub volume: Option<u8>,
     pub error: Option<bool>,
     pub child_lock: Option<bool>,
 }
@@ -56,7 +56,7 @@ impl DeviceState {
             Event::CurrentTemperature(t) => self.current_temperature = Some(t),
             Event::TargetTemperature(t) => self.target_temperature = Some(t),
             Event::Mode(m) => self.mode = Some(m),
-            Event::WaterPresent(b) => self.water_present = Some(b),
+            Event::Volume(v) => self.volume = Some(v),
             Event::Error(b) => self.error = Some(b),
             Event::ChildLock(b) => self.child_lock = Some(b),
             _ => {}

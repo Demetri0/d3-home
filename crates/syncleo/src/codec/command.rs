@@ -5,7 +5,7 @@ pub mod ty {
     pub const MODE: u8 = 1;
     pub const TARGET_TEMPERATURE: u8 = 2;
     pub const ERROR: u8 = 7;
-    pub const WATER: u8 = 9;
+    pub const VOLUME: u8 = 9;
     pub const CURRENT_TEMPERATURE: u8 = 20;
     pub const BACKLIGHT: u8 = 28;
     pub const CHILD_LOCK: u8 = 30;
@@ -64,7 +64,17 @@ pub enum Event {
     Mode(PowerMode),
     TargetTemperature(u8),
     CurrentTemperature(u8),
-    WaterPresent(bool),
+    /// Code 9. The Python reference this protocol was derived from calls
+    /// this `volume` and decodes it there as `byte == 1`, the same as
+    /// every other one-byte flag -- which is where the inherited (and
+    /// wrong) `WaterPresent(bool)` name and decode came from. Tested
+    /// against a real device with a full litre of water in it, the byte
+    /// it sent did not read as `1`, so that boolean collapse was throwing
+    /// away real information and asserting something false. What the byte
+    /// actually means -- a level, a volume in some unit, something else
+    /// entirely -- is not established; this carries it raw and undecoded
+    /// until someone has evidence to say otherwise.
+    Volume(u8),
     Error(bool),
     Backlight(bool),
     ChildLock(bool),
@@ -126,7 +136,10 @@ impl Event {
                 _ => unknown(),
             },
             ty::ERROR => flag(Self::Error),
-            ty::WATER => flag(Self::WaterPresent),
+            ty::VOLUME => match data {
+                [v] => Self::Volume(*v),
+                _ => unknown(),
+            },
             ty::BACKLIGHT => flag(Self::Backlight),
             ty::CHILD_LOCK => flag(Self::ChildLock),
             ty::ACCESS_CONTROL => flag(Self::AccessControl),
@@ -168,11 +181,23 @@ mod tests {
 
     #[test]
     fn decodes_boolean_state() {
-        assert_eq!(Event::decode(&[9, 1]).unwrap(), Event::WaterPresent(true));
         assert_eq!(Event::decode(&[7, 0]).unwrap(), Event::Error(false));
         assert_eq!(Event::decode(&[28, 1]).unwrap(), Event::Backlight(true));
         assert_eq!(Event::decode(&[30, 1]).unwrap(), Event::ChildLock(true));
         assert_eq!(Event::decode(&[133, 0]).unwrap(), Event::AccessControl(false));
+    }
+
+    #[test]
+    fn decodes_volume_as_a_raw_byte_not_a_boolean() {
+        // The old `WaterPresent(bool)` decode collapsed this byte through
+        // `== 1`, so any value other than 0 or 1 silently became `false`
+        // ("no water") -- exactly what a real device with a full litre in
+        // it reported. Pinning a value outside {0, 1} here is what would
+        // have caught that: it must survive decoding intact, as a number,
+        // not get squashed into a boolean.
+        assert_eq!(Event::decode(&[9, 1]).unwrap(), Event::Volume(1));
+        assert_eq!(Event::decode(&[9, 0]).unwrap(), Event::Volume(0));
+        assert_eq!(Event::decode(&[9, 42]).unwrap(), Event::Volume(42));
     }
 
     #[test]
