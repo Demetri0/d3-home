@@ -32,9 +32,15 @@ pub enum Error {
     Codec(#[from] CodecError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    // Confirmed against the real device: this fired once, right after the
+    // kettle was set back on its base, and a retry moments later succeeded
+    // -- a device still booting, not a device that had genuinely stopped
+    // reporting anything. The wording says so, without promising a retry
+    // will always help.
     #[error(
         "device reported no state at all within the window; it may not send a state report after \
-         the handshake, or its report arrived too late"
+         the handshake, its report arrived too late, or it is still booting after just being \
+         powered on -- if so, trying again in a few seconds may work"
     )]
     NoState,
     #[error("device advertises curve {curve} protocol {protocol}, which this client was not written for")]

@@ -256,12 +256,30 @@ fn try_connect(
 /// Locate `device` on the network by its MAC address over mDNS.
 fn discover_device(device: &Device) -> Result<Found, AppError> {
     let discovery = MdnsDiscovery::new()?;
-    discovery.find(&device.mac, DISCOVERY_TIMEOUT)?.ok_or_else(|| {
-        AppError::NotFound(format!(
-            "device '{}' (mac {}) was not found on the network",
-            device.name, device.mac
-        ))
-    })
+    discovery
+        .find(&device.mac, DISCOVERY_TIMEOUT)?
+        .ok_or_else(|| AppError::NotFound(not_found_message(&device.name, &device.mac)))
+}
+
+/// The message for "mDNS produced nothing for this MAC within the timeout."
+/// Kept as its own pure function, separate from `discover_device`, so the
+/// wording can be pinned by a test without a real socket or multicast
+/// traffic.
+///
+/// This is where the real kettle's evidence lives: it was lifted off its
+/// base mid-session, the cached endpoint stopped answering, discovery came
+/// back empty, and the honest-but-unhelpful message at the time was just
+/// "was not found on the network." A kettle spends much of its life off
+/// its base -- and therefore unpowered -- so that is by far the likeliest
+/// reason this fires, more likely than an actual network fault. The
+/// message says so without asserting it as fact: the device could still be
+/// powered and merely unreachable.
+fn not_found_message(name: &str, mac: &str) -> String {
+    format!(
+        "device '{name}' (mac {mac}) was not found on the network\n\
+         a kettle that has been lifted off its base is unpowered and won't answer -- that's \
+         the likeliest reason here, though a real network problem is still possible"
+    )
 }
 
 /// Persist a freshly discovered endpoint into `device_name`'s
@@ -362,6 +380,19 @@ mod tests {
     #[test]
     fn only_a_single_temperature_argument_is_accepted() {
         assert!(parse_target_temperature(&["80".to_string(), "90".to_string()]).is_err());
+    }
+
+    #[test]
+    fn the_not_found_message_keeps_the_mac_and_names_the_unpowered_kettle_case() {
+        // Pinned loosely on purpose: this checks the load-bearing content
+        // (the mac, and the off-base/unpowered hint) survives a future
+        // rewording, not the exact sentence.
+        let message = not_found_message("kettle", "aabbccddeeff");
+        assert!(message.contains("aabbccddeeff"), "mac missing from: {message}");
+        assert!(message.contains("kettle"), "device name missing from: {message}");
+        let lower = message.to_lowercase();
+        assert!(lower.contains("base"), "off-base hint missing from: {message}");
+        assert!(lower.contains("unpowered") || lower.contains("power"), "power hint missing from: {message}");
     }
 
     #[test]
