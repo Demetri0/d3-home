@@ -59,6 +59,23 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
+/// Normalise a MAC address the way `d3home` compares it everywhere else:
+/// lowercase, with `:` and `-` separators stripped. Every comparison
+/// against a MAC (`discovery::Discovery::find`, `commands::registry`'s
+/// `cache_discovered`) is a byte-for-byte `==` against what mDNS advertises
+/// -- which is always lowercase with no separators, since it comes straight
+/// from the device's `_syncleo._udp.local.` instance name -- so a
+/// hand-typed or pasted MAC that doesn't already look like that (uppercase,
+/// as most routers' DHCP tables render one; colon- or hyphen-separated, as
+/// every common tool prints one) silently never matches, and every command
+/// for that device fails with "not found" -- a message that reads like the
+/// hardware's fault, not a formatting mismatch in the config. Applied once,
+/// at load, rather than at every comparison site, so nothing downstream
+/// has to remember to normalise before comparing.
+pub(crate) fn normalize_mac(mac: &str) -> String {
+    mac.chars().filter(|c| *c != ':' && *c != '-').map(|c| c.to_ascii_lowercase()).collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub devices: Vec<Device>,
@@ -156,7 +173,10 @@ impl Config {
     /// Load and validate the registry from `path`.
     pub fn load(path: &Path) -> Result<Config, ConfigError> {
         let text = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&text).map_err(|e| parse_error(&e, &text))?;
+        let mut config: Config = toml::from_str(&text).map_err(|e| parse_error(&e, &text))?;
+        for device in &mut config.devices {
+            device.mac = normalize_mac(&device.mac);
+        }
         config.validate()?;
         Ok(config)
     }
@@ -682,6 +702,33 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_mac_typed_in_uppercase_still_matches_what_discovery_would_find() {
+        // Finding 7: mDNS's instance name (and therefore `Found::mac`) is
+        // always lowercase, with no separators. A MAC pasted from a
+        // router's DHCP table -- typically uppercase, colon-separated --
+        // must still end up equal to that, or every lookup for the device
+        // silently never matches.
+        let dir = std::env::temp_dir().join(format!("d3home-test-mac-case-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(&path, KETTLE.replace(r#"mac = "aabbccddeeff""#, r#"mac = "AA:BB:CC:DD:EE:FF""#))
+            .unwrap();
+
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.resolve("kettle").unwrap().mac, "aabbccddeeff");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn normalize_mac_lowercases_and_strips_common_separators() {
+        assert_eq!(normalize_mac("aabbccddeeff"), "aabbccddeeff");
+        assert_eq!(normalize_mac("AABBCCDDEEFF"), "aabbccddeeff");
+        assert_eq!(normalize_mac("AA:BB:CC:DD:EE:FF"), "aabbccddeeff");
+        assert_eq!(normalize_mac("aa-bb-cc-dd-ee-ff"), "aabbccddeeff");
     }
 
     #[test]
