@@ -265,10 +265,20 @@ fn parse_error(err: &toml::de::Error, source: &str) -> ConfigError {
 }
 
 /// 1-based line and column of the byte offset `at` within `source`.
+///
+/// `at` comes from another crate's `toml::de::Error::span()`; walks
+/// `char_indices` and breaks at the offset instead of slicing `source` at
+/// `at` directly, so a byte offset that does not land on a char boundary
+/// can never panic here (see the doc comment on [`ConfigError::Parse`]: a
+/// panic on this path would print up to 256 bytes of surrounding source --
+/// possibly a token -- to stderr as part of Rust's slice-fail message).
 fn line_col(source: &str, at: usize) -> (usize, usize) {
     let mut line = 1;
     let mut column = 1;
-    for ch in source[..at.min(source.len())].chars() {
+    for (i, ch) in source.char_indices() {
+        if i >= at {
+            break;
+        }
         if ch == '\n' {
             line += 1;
             column = 1;
