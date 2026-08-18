@@ -125,6 +125,15 @@ impl Config {
         }
 
         for device in &self.devices {
+            if RESERVED.contains(&device.name.as_str()) {
+                // A device named e.g. "help" would load fine and then be
+                // permanently unreachable, since `d3home help ...` always
+                // routes to the built-in, never to device resolution.
+                return Err(ConfigError::ReservedAlias {
+                    alias: device.name.clone(),
+                    device: device.name.clone(),
+                });
+            }
             for alias in &device.aliases {
                 if RESERVED.contains(&alias.as_str()) {
                     return Err(ConfigError::ReservedAlias {
@@ -338,6 +347,15 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
     fn refuses_an_alias_that_shadows_a_builtin_command() {
         // Silently losing `d3home discover` to an alias would be a nasty surprise.
         let toml = KETTLE.replace(r#"["k", "чайник"]"#, r#"["discover"]"#);
+        assert!(matches!(parse(&toml), Err(ConfigError::ReservedAlias { .. })));
+    }
+
+    #[test]
+    fn refuses_a_device_named_after_a_builtin_command() {
+        // Without this check a device named "help" loads fine and is then
+        // permanently unreachable: `d3home help status` always routes to
+        // the built-in help text, never to device resolution.
+        let toml = KETTLE.replace(r#"name = "kettle""#, r#"name = "help""#);
         assert!(matches!(parse(&toml), Err(ConfigError::ReservedAlias { .. })));
     }
 
