@@ -13,6 +13,11 @@ mod support {
     /// one process, so all of them share a pid. Each `KettleSimulator`
     /// binds `127.0.0.1:0`, so the port is unique per test regardless.
     pub fn config_with(addr: std::net::SocketAddr, public_key: &str, token: &str) -> PathBuf {
+        // Never put a real device's MAC in a fixture. These tests run the actual
+        // binary, and if the simulator's cached endpoint fails to answer, the CLI
+        // falls back to mDNS discovery by design -- which on a home network would
+        // find the real kettle and send it whatever the test was sending, `start`
+        // included. A MAC that matches nothing keeps that path harmless.
         config_with_mac(addr, public_key, token, "aabbccddeeff")
     }
 

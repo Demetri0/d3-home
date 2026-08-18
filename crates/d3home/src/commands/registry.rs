@@ -177,7 +177,9 @@ mod tests {
         let path = dir.join("devices.toml");
         std::fs::write(&path, sample_kettle_toml()).unwrap();
 
-        cache_discovered(&path, &[found("aabbccddeeff")]).unwrap();
+        // A MAC deliberately different from the configured device, so the
+        // discovered result must be ignored rather than cached.
+        cache_discovered(&path, &[found("010203040506")]).unwrap();
 
         let reloaded = Config::load(&path).unwrap();
         assert!(reloaded.resolve("kettle").unwrap().cached.is_none());
