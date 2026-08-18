@@ -108,16 +108,48 @@ fn start(device: &Device, args: &[String], config_path: &Path) -> Result<(), App
     with_spinner(Phase::Sending, || -> Result<(), AppError> {
         match target {
             None => client.send(Command::Mode(PowerMode::On))?,
-            Some(temperature) => {
-                // Order matters here: Custom mode first, then the target.
-                // Task 12 verifies this against the real kettle and flips
-                // it if the hardware wants the other order.
-                client.send(Command::Mode(PowerMode::Custom))?;
-                client.send(Command::TargetTemperature(temperature))?;
-            }
+            Some(temperature) => send_custom_target(&mut client, temperature)?,
         }
         Ok(())
     })?;
+    Ok(())
+}
+
+/// The one decision point for the order `start <temperature>` sends its two
+/// commands in. Kept as its own function -- not inlined into `start` as two
+/// `?`-chained `client.send(...)` calls -- so a future hardware
+/// re-verification only has to find and flip this one place.
+///
+/// **Target first, then Custom mode.** This is the *reverse* of the order
+/// confirmed against the real kettle (`docs/hardware-notes.md`: mode first,
+/// then target, heats to the target and not to 100). The reversal is
+/// deliberate, not a mistake:
+///
+/// `Client::send` performs each command as its own round trip with its own
+/// resend/timeout. If the *second* command's ack never arrives -- one
+/// dropped datagram plus four dropped resends, or the kettle drops off
+/// Wi-Fi for a few seconds -- `start` returns an error, but whatever the
+/// *first* command already did on the device stands; there is no protocol
+/// message that sets both atomically. With the old order (Custom mode
+/// first), that partial failure left the kettle *heating*, unattended, to
+/// whatever target was already stored from a previous session -- commonly
+/// 100°C -- while the CLI reported failure and the user reasonably believed
+/// nothing had happened. That is the worst outcome this program can
+/// produce. With this order, the identical partial failure instead leaves a
+/// new target set on a kettle that is still off: inert.
+///
+/// The evidence that this is safe is an *inference*, not a confirmed fact:
+/// real captures show the device reporting `mode: off` alongside a stored
+/// `target temperature: 45°C`, which proves the device holds a target
+/// independently of its mode -- but nobody has confirmed the device
+/// *accepts a target change* while off. If it silently ignores one, this
+/// order reproduces the original bug with the two steps swapped, and
+/// re-verifying this against the real kettle -- then flipping the two lines
+/// below back if needed -- is still outstanding. This function is not
+/// exercised against real hardware by this fix; only the simulator.
+fn send_custom_target(client: &mut Client, temperature: u8) -> Result<(), syncleo::Error> {
+    client.send(Command::TargetTemperature(temperature))?;
+    client.send(Command::Mode(PowerMode::Custom))?;
     Ok(())
 }
 

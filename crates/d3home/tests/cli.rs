@@ -87,6 +87,88 @@ fn starts_the_kettle_at_a_chosen_temperature() {
 }
 
 #[test]
+fn a_partial_start_failure_leaves_the_kettle_off_not_heating() {
+    // Finding 1: `start N` sends two commands (TargetTemperature then
+    // Mode(Custom), see `commands::kettle::send_custom_target`) with no
+    // atomicity between them. If the second one's ack never arrives, the
+    // CLI must report failure without leaving the kettle heating to a
+    // stored target -- the worst outcome this program can produce.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+
+    // Ack the first command (the target) normally, then go silent --
+    // simulating the second command's (Mode(Custom)) ack, and every
+    // resend of it, being lost.
+    handle.ignore_commands_after(1);
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "kettle", "start", "60"])
+        .timeout(std::time::Duration::from_secs(15))
+        .assert()
+        .code(5);
+
+    let state = handle.state();
+    assert_eq!(state.target, 60, "the target must still have been set -- that command was acked");
+    assert_ne!(
+        state.mode,
+        syncleo::codec::command::PowerMode::Custom,
+        "a failed start must not leave the kettle in Custom mode heating to a stale target"
+    );
+
+    handle.shutdown();
+}
+
+#[test]
+fn watch_exits_cleanly_instead_of_panicking_when_its_output_pipe_is_closed() {
+    // Finding 4: `println!` (what `output::print_event` used to use)
+    // panics when the write fails -- and Rust ignores SIGPIPE, so a
+    // downstream reader going away (`| head -1`, a killed notifier) turns
+    // into a broken-pipe write failure, not a signal that kills the
+    // process outright. `watch` is explicitly meant to be piped, so this
+    // must exit within the documented 0-6 contract, never 101.
+    use assert_cmd::prelude::*;
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    // Delay the post-handshake burst so it is guaranteed to still be
+    // unsent when the read end below is closed -- every line the child
+    // then tries to print hits an already-broken pipe, rather than racing
+    // whether the (otherwise near-instant) burst beat this test to it.
+    handle.delay_state_burst(Duration::from_millis(500));
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+
+    let mut child = std::process::Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "watch"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("d3home watch should spawn");
+
+    // Close our end of stdout -- the read end -- immediately: nothing has
+    // been written yet (the burst is delayed), so the pipe has zero
+    // readers by the time the child's first `print_event` call fires.
+    drop(child.stdout.take().expect("stdout was piped"));
+
+    let output = child
+        .wait_with_output()
+        .expect("the process must exit on its own, not hang, once its output pipe is closed");
+
+    assert!(
+        matches!(output.status.code(), Some(0) | Some(5)),
+        "expected an exit code within the documented 0-6 contract, got {:?} (stderr: {})",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "watch must not panic on a broken output pipe: {stderr}");
+
+    handle.shutdown();
+}
+
+#[test]
 fn an_alias_works_exactly_like_the_device_name() {
     let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
     let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
