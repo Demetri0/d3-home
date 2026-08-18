@@ -36,6 +36,15 @@ fn fmt_flag(b: Option<bool>) -> &'static str {
     }
 }
 
+/// Renders code 9's raw byte as a plain number, or `unknown` if the device
+/// never reported it. Deliberately not `yes`/`no`, and deliberately not
+/// wrapped in any interpreted unit: what this byte counts is not
+/// established (see [`Event::Volume`]'s doc comment), so the honest thing
+/// to show is the number itself, not a guess dressed up as a reading.
+fn fmt_volume(v: Option<u8>) -> String {
+    v.map_or_else(|| "unknown".to_string(), |v| v.to_string())
+}
+
 /// Print everything a [`crate::commands::kettle`] status check learned
 /// about the device, either as one JSON object or as human-readable lines.
 pub fn print_state(state: &DeviceState, json: bool) {
@@ -44,7 +53,7 @@ pub fn print_state(state: &DeviceState, json: bool) {
             "current_temperature": state.current_temperature,
             "target_temperature": state.target_temperature,
             "mode": state.mode.map(mode_str),
-            "water_present": state.water_present,
+            "volume": state.volume,
             "error": state.error,
             "child_lock": state.child_lock,
         });
@@ -53,7 +62,7 @@ pub fn print_state(state: &DeviceState, json: bool) {
         println!("mode:                {}", state.mode.map(mode_str).unwrap_or("unknown"));
         println!("current temperature: {}", fmt_temperature(state.current_temperature));
         println!("target temperature:  {}", fmt_temperature(state.target_temperature));
-        println!("water present:       {}", fmt_flag(state.water_present));
+        println!("volume:               {}", fmt_volume(state.volume));
         println!("error:               {}", fmt_flag(state.error));
         println!("child lock:          {}", fmt_flag(state.child_lock));
     }
@@ -83,7 +92,7 @@ fn event_json(event: &Event) -> serde_json::Value {
         Event::Mode(m) => json!({"mode": mode_str(*m)}),
         Event::TargetTemperature(t) => json!({"target_temperature": t}),
         Event::CurrentTemperature(t) => json!({"current_temperature": t}),
-        Event::WaterPresent(b) => json!({"water_present": b}),
+        Event::Volume(v) => json!({"volume": v}),
         Event::Error(b) => json!({"error": b}),
         Event::ChildLock(b) => json!({"child_lock": b}),
         Event::Backlight(b) => json!({"backlight": b}),
@@ -103,7 +112,7 @@ fn event_human(event: &Event) -> String {
         Event::Mode(m) => format!("mode: {}", mode_str(*m)),
         Event::TargetTemperature(t) => format!("target temperature: {t}\u{b0}C"),
         Event::CurrentTemperature(t) => format!("current temperature: {t}\u{b0}C"),
-        Event::WaterPresent(b) => format!("water present: {}", yes_no(*b)),
+        Event::Volume(v) => format!("volume: {v}"),
         Event::Error(b) => format!("error: {}", yes_no(*b)),
         Event::ChildLock(b) => format!("child lock: {}", yes_no(*b)),
         Event::Backlight(b) => format!("backlight: {}", yes_no(*b)),
