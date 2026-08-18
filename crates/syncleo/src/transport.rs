@@ -35,6 +35,16 @@ impl UdpTransport {
     }
 }
 
+#[cfg(test)]
+impl UdpTransport {
+    /// Test-only: the local address the socket ended up bound to, so a
+    /// test can point a second, independent socket at it without needing
+    /// `UdpTransport` to expose that generally.
+    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+}
+
 impl Transport for UdpTransport {
     fn send(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         self.socket.send(bytes)?;
@@ -48,7 +58,20 @@ impl Transport for UdpTransport {
             return Ok(None);
         }
         self.socket.set_read_timeout(Some(timeout))?;
-        let mut buf = [0u8; 2048];
+        // 65,535 bytes: the largest possible UDP payload (a 16-bit length
+        // field, minus the 8-byte UDP header), so no legitimate datagram
+        // can ever be larger than this buffer. A fixed 2048-byte buffer
+        // used to sit here; on Linux, a datagram larger than the buffer
+        // passed to `recv` is truncated to fit it, with nothing in the
+        // return value distinguishing that from a genuinely short read --
+        // the truncated bytes would reach `Frame::parse`, fail
+        // `LengthMismatch`, and get silently dropped by
+        // `Session::on_packet`, indistinguishable from noise. Every frame
+        // this protocol actually sends is a small fraction of even the old
+        // buffer, so this only matters against a firmware that ever emits
+        // something larger -- but at this size, that class of bug is
+        // categorically impossible rather than merely unlikely.
+        let mut buf = [0u8; 65_535];
         match self.socket.recv(&mut buf) {
             Ok(n) => Ok(Some(buf[..n].to_vec())),
             Err(e) if is_no_data(&e) => Ok(None),
@@ -164,6 +187,26 @@ mod tests {
             }
             SocketAddr::V4(_) => panic!("expected a V6 address"),
         }
+    }
+
+    #[test]
+    fn a_datagram_up_to_the_maximum_udp_payload_size_arrives_whole() {
+        // Finding 10: a fixed 2048-byte receive buffer used to silently
+        // truncate anything larger -- indistinguishable, from the caller's
+        // side, from a short/malformed frame. This proves a datagram well
+        // past the old buffer's size survives intact.
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut transport = UdpTransport::connect(sender.local_addr().unwrap()).unwrap();
+        let transport_addr = transport.local_addr().unwrap();
+
+        let big = vec![0xABu8; 3000];
+        sender.send_to(&big, transport_addr).unwrap();
+
+        let received = transport
+            .recv(Duration::from_secs(2))
+            .unwrap()
+            .expect("a 3000-byte datagram must arrive");
+        assert_eq!(received, big, "the datagram must arrive whole, not truncated");
     }
 
     #[test]
