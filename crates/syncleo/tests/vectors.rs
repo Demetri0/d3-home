@@ -88,6 +88,56 @@ proptest::proptest! {
     }
 }
 
+// Every expected value below was captured from the Python reference
+// implementation (gch1p/polaris_pwk_1725cgld) with the keys above, the same
+// way the Cmd vectors at the top of this file were. Unlike the Cmd
+// vectors, nothing before this commit exercised an Ack, a Nak, or a Ping
+// frame against the reference at all: the simulator's `handle_established`
+// returned early on any non-Cmd frame without even decrypting it, so every
+// Ack this client ever sent in any test was generated and then discarded
+// unread. If the ack framing were subtly wrong here, nothing would have
+// noticed until real hardware either retransmitted forever or dropped the
+// session.
+#[test]
+fn encrypts_an_ack_frame_byte_for_byte() {
+    // Ack carries no body -- only the sequence byte is encrypted.
+    let frame = encrypt_frame(&keys(), 0x42, FrameType::Ack, &[]);
+    assert_eq!(frame.to_bytes(), unhex("4200100095eb3dc5eaa61755232adfee881ca3eb"));
+
+    let frame = encrypt_frame(&keys(), 0x00, FrameType::Ack, &[]);
+    assert_eq!(frame.to_bytes(), unhex("0000100007ddee3f704c606846d998133e2f5af3"));
+
+    let frame = encrypt_frame(&keys(), 0xFE, FrameType::Ack, &[]);
+    assert_eq!(frame.to_bytes(), unhex("fe001000892959f3fb40b33cbef413b00d82e663"));
+}
+
+#[test]
+fn encrypts_a_nak_frame_with_the_same_ciphertext_as_the_matching_ack() {
+    // Ack and Nak carry identical (empty) plaintext for a given sequence,
+    // so their ciphertext is identical too -- only the frame type byte in
+    // the header tells them apart. Verified against the reference
+    // separately anyway, rather than just asserted equal to the Ack
+    // vector, so a bug that accidentally made the frame type not matter
+    // (e.g. an encryption scheme that folded `ty` into the plaintext) would
+    // still be caught.
+    let frame = encrypt_frame(&keys(), 0x42, FrameType::Nak, &[]);
+    assert_eq!(frame.to_bytes(), unhex("4203100095eb3dc5eaa61755232adfee881ca3eb"));
+
+    let ack = encrypt_frame(&keys(), 0x42, FrameType::Ack, &[]);
+    assert_eq!(
+        frame.payload, ack.payload,
+        "Ack and Nak must share ciphertext for the same sequence; only the type byte differs"
+    );
+}
+
+#[test]
+fn encrypts_a_ping_command_byte_for_byte() {
+    use syncleo::codec::command::Command;
+
+    let frame = encrypt_frame(&keys(), 0x07, FrameType::Cmd, &Command::Ping.encode());
+    assert_eq!(frame.to_bytes(), unhex("07011000b8a7028c5cce585ee7399f68f882ed33"));
+}
+
 #[test]
 fn builds_the_reference_handshake_frame() {
     use syncleo::codec::handshake::handshake_frame;

@@ -47,6 +47,30 @@ fn reads_state_back_from_the_device() {
 }
 
 #[test]
+fn the_devices_own_acks_are_decrypted_and_validated_by_the_simulator() {
+    // The simulator used to return early on any non-Cmd frame from an
+    // established peer without even decrypting it, so every Ack the
+    // client ever sent -- acknowledging the handshake response and each
+    // state-burst report -- was generated and then silently discarded.
+    // This is the only test that proves those acks are actually well
+    // formed rather than merely produced.
+    let handle = KettleSimulator::spawn(TOKEN).unwrap();
+    let mut client = connect(&handle, TOKEN).expect("handshake succeeds");
+
+    // The handshake response and the four state-burst reports are each a
+    // Cmd frame the client must ack; collect_state's window is long enough
+    // for all of them to round-trip.
+    client.collect_state(Duration::from_millis(500)).unwrap();
+
+    assert!(
+        handle.valid_acks() >= 1,
+        "the simulator must have decrypted and validated at least one Ack from the client"
+    );
+
+    handle.shutdown();
+}
+
+#[test]
 fn a_wrong_token_is_rejected() {
     let handle = KettleSimulator::spawn(TOKEN).unwrap();
 

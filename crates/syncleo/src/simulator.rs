@@ -14,7 +14,7 @@
 //! on the pure-session side.
 
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -60,6 +60,7 @@ pub struct KettleHandle {
     pub public_wire: [u8; 32],
     state: Arc<Mutex<SimulatedState>>,
     ignore_commands: Arc<AtomicBool>,
+    valid_acks: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -78,6 +79,17 @@ impl KettleHandle {
     /// separate device that is merely unreachable.
     pub fn ignore_commands(&self) {
         self.ignore_commands.store(true, Ordering::SeqCst);
+    }
+
+    /// How many `Ack` frames from the peer this simulator has decrypted and
+    /// accepted as genuine (correct type byte, correct padding, decrypted
+    /// sequence matches the header). Exists so a test can prove the
+    /// client's outgoing acks were actually exercised end-to-end rather
+    /// than merely generated and discarded: before this counter existed,
+    /// `handle_established` returned early on any non-`Cmd` frame without
+    /// even decrypting it.
+    pub fn valid_acks(&self) -> usize {
+        self.valid_acks.load(Ordering::SeqCst)
     }
 
     /// Stop the simulator thread and wait for it to exit.
@@ -118,13 +130,15 @@ impl KettleSimulator {
             water: true,
         }));
         let ignore_commands = Arc::new(AtomicBool::new(false));
+        let valid_acks = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));
 
         let thread = {
             let state = state.clone();
             let ignore_commands = ignore_commands.clone();
+            let valid_acks = valid_acks.clone();
             let stop = stop.clone();
-            thread::spawn(move || run(socket, token, state, ignore_commands, stop))
+            thread::spawn(move || run(socket, token, state, ignore_commands, valid_acks, stop))
         };
 
         Ok(KettleHandle {
@@ -132,6 +146,7 @@ impl KettleSimulator {
             public_wire: public_wire(&DEVICE_PRIVATE),
             state,
             ignore_commands,
+            valid_acks,
             stop,
             thread: Some(thread),
         })
@@ -151,6 +166,7 @@ fn run(
     token: [u8; 16],
     state: Arc<Mutex<SimulatedState>>,
     ignore_commands: Arc<AtomicBool>,
+    valid_acks: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
 ) {
     let mut peer: Option<Peer> = None;
@@ -168,7 +184,7 @@ fn run(
         match &peer {
             Some(p) if p.addr == from => {
                 if !ignore_commands.load(Ordering::SeqCst) {
-                    handle_established(&socket, p, &frame, &state);
+                    handle_established(&socket, p, &frame, &state, &valid_acks);
                 }
             }
             _ => handle_handshake(&socket, from, &frame, token, &mut peer, &state),
@@ -247,23 +263,46 @@ fn send_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, stat
     }
 }
 
-/// Handle a frame from an already-handshaken peer: acknowledge it and, if
-/// it decodes into a command we track, apply it to the state.
-fn handle_established(socket: &UdpSocket, peer: &Peer, frame: &Frame, state: &Arc<Mutex<SimulatedState>>) {
-    if frame.head.ty != FrameType::Cmd {
-        return;
-    }
-    let Ok(body) = decrypt_frame(&peer.keys, frame) else { return };
+/// Handle a frame from an already-handshaken peer.
+///
+/// A `Cmd` is acknowledged and, if it decodes into a command we track,
+/// applied to the state -- unchanged from before. An `Ack` is the peer
+/// acknowledging one of *our* outgoing frames (the handshake response, or a
+/// state-burst report): decrypted and counted as valid rather than dropped
+/// unread, so the end-to-end tests actually exercise the client's ack
+/// framing instead of merely generating and discarding it. Matching on
+/// `frame.head.ty` up front (rather than, say, "try to decrypt it as an
+/// Ack and see if that succeeds") matters here specifically: `Ack` and
+/// `Nak` carry identical ciphertext for a given sequence, so a check that
+/// only asked "does this decrypt cleanly" could not tell the two apart.
+fn handle_established(
+    socket: &UdpSocket,
+    peer: &Peer,
+    frame: &Frame,
+    state: &Arc<Mutex<SimulatedState>>,
+    valid_acks: &AtomicUsize,
+) {
+    match frame.head.ty {
+        FrameType::Cmd => {
+            let Ok(body) = decrypt_frame(&peer.keys, frame) else { return };
 
-    let ack = encrypt_frame(&peer.keys, frame.head.seq, FrameType::Ack, &[]).to_bytes();
-    let _ = socket.send_to(&ack, peer.addr);
+            let ack = encrypt_frame(&peer.keys, frame.head.seq, FrameType::Ack, &[]).to_bytes();
+            let _ = socket.send_to(&ack, peer.addr);
 
-    if let Ok(event) = Event::decode(&body) {
-        let mut s = state.lock().expect("state lock poisoned");
-        match event {
-            Event::Mode(m) => s.mode = m,
-            Event::TargetTemperature(t) => s.target = t,
-            _ => {}
+            if let Ok(event) = Event::decode(&body) {
+                let mut s = state.lock().expect("state lock poisoned");
+                match event {
+                    Event::Mode(m) => s.mode = m,
+                    Event::TargetTemperature(t) => s.target = t,
+                    _ => {}
+                }
+            }
         }
+        FrameType::Ack => {
+            if decrypt_frame(&peer.keys, frame).is_ok() {
+                valid_acks.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        FrameType::Aux | FrameType::Nak => {}
     }
 }
