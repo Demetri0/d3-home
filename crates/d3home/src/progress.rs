@@ -44,6 +44,11 @@ pub enum Phase {
     Sending,
     /// `status` is waiting for the device's post-handshake state burst.
     WaitingForState,
+    /// `watch` lost the device (a timeout, silence, or an unacknowledged
+    /// command -- lifting a kettle off its base cuts its power outright,
+    /// which is by far the likeliest cause) and is backing off between
+    /// reconnect attempts, each of which re-runs the full connect cycle.
+    WaitingToReconnect,
 }
 
 impl Phase {
@@ -53,6 +58,7 @@ impl Phase {
             Phase::Connecting => "connecting",
             Phase::Sending => "sending the command",
             Phase::WaitingForState => "waiting for state",
+            Phase::WaitingToReconnect => "waiting to reconnect",
         }
     }
 }
@@ -168,8 +174,13 @@ mod tests {
 
     #[test]
     fn every_phase_has_a_distinct_non_empty_label() {
-        let phases =
-            [Phase::Searching, Phase::Connecting, Phase::Sending, Phase::WaitingForState];
+        let phases = [
+            Phase::Searching,
+            Phase::Connecting,
+            Phase::Sending,
+            Phase::WaitingForState,
+            Phase::WaitingToReconnect,
+        ];
         let labels: Vec<&str> = phases.iter().map(|p| p.label()).collect();
         for label in &labels {
             assert!(!label.is_empty());

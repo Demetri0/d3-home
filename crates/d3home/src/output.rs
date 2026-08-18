@@ -172,6 +172,33 @@ fn event_human(event: &Event) -> String {
     }
 }
 
+/// Mark, in the printed event stream itself, the boundary between the
+/// session that just ended and the one about to begin. `watch` reconnects
+/// rather than exiting when the device goes away (see
+/// `commands::kettle::watch`), and the device replays its whole
+/// post-handshake state burst on every connection -- without a marker,
+/// that repeated block of events would read as a glitch (the same values
+/// reported twice) rather than what it is: a fresh session after the old
+/// one was lost.
+pub fn print_watch_reconnected(json: bool) {
+    if json {
+        println!("{}", reconnected_json());
+    } else {
+        println!("{}", RECONNECTED_HUMAN);
+    }
+    // Same reasoning as `print_event`: `watch` is meant to be piped, and a
+    // block-buffered stdout could sit on this until the next event flushed
+    // it -- or never, if the process is killed first.
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+}
+
+const RECONNECTED_HUMAN: &str = "--- reconnected ---";
+
+fn reconnected_json() -> serde_json::Value {
+    json!({"reconnected": true})
+}
+
 /// List the configured devices and their aliases -- but never the token,
 /// even under `--json`.
 pub fn print_devices(config: &Config, json: bool) {
@@ -286,6 +313,21 @@ mod tests {
         let value = event_json(&Event::Diagnostic(vec![0]));
         assert_eq!(value["diagnostic"], json!([0]));
         assert!(value.get("diagnostic_decoded").is_none());
+    }
+
+    #[test]
+    fn the_json_reconnect_marker_is_a_well_formed_event_line() {
+        // Piped `--json` output must stay one-JSON-object-per-line even at
+        // the seam between sessions -- a consumer that parses every line
+        // (`jq`, a notifier) must not choke on this one.
+        let line = reconnected_json().to_string();
+        let value: serde_json::Value = serde_json::from_str(&line).expect("must be one JSON object");
+        assert_eq!(value["reconnected"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn the_human_reconnect_marker_says_so_plainly() {
+        assert!(RECONNECTED_HUMAN.to_lowercase().contains("reconnect"));
     }
 
     fn sample_found() -> Found {
