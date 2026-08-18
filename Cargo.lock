@@ -888,6 +888,7 @@ dependencies = [
  "aes",
  "cbc",
  "cipher",
+ "libc",
  "mdns-sd",
  "proptest",
  "sha2",
