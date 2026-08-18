@@ -696,6 +696,33 @@ fn refuses_to_create_an_alias_that_shadows_a_builtin() {
 }
 
 #[test]
+fn refuses_to_create_an_alias_that_looks_like_a_flag_or_is_empty() {
+    // Finding 12: both of these parse fine and would otherwise sit in the
+    // config forever, permanently unusable -- `--json` because clap
+    // consumes it as the global flag before alias resolution ever runs,
+    // an empty string because it can never be typed as a positional word.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    let path = config.to_str().unwrap();
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "alias", "add", "--json", "kettle"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("start with"));
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "alias", "add", "", "kettle"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("non-empty"));
+
+    handle.shutdown();
+}
+
+#[test]
 // The brief's assertion form (`predicate::str::contains(&hex(&TOKEN))`) is
 // kept verbatim; clippy would rather see the `&` dropped.
 #[allow(clippy::needless_borrows_for_generic_args)]

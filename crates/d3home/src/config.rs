@@ -152,6 +152,13 @@ pub enum ConfigError {
     #[error("alias '{alias}' on device '{device}' collides with a built-in command")]
     ReservedAlias { alias: String, device: String },
 
+    #[error(
+        "alias {alias:?} on device '{device}' is invalid: an alias must be non-empty and must not \
+         start with '-' -- one that does can never actually be typed, since the CLI parses anything \
+         starting with '-' as a flag before alias resolution ever runs"
+    )]
+    InvalidAlias { alias: String, device: String },
+
     #[error("alias '{alias}' is used by both '{first}' and '{second}'")]
     DuplicateAlias {
         alias: String,
@@ -211,6 +218,19 @@ impl Config {
                 });
             }
             for alias in &device.aliases {
+                // Finding 12: an empty alias, or one starting with '-',
+                // parses fine here and gets written to the config, but can
+                // then never actually be typed -- `d3home --json status`
+                // has clap consume `--json` as the global flag long before
+                // alias resolution runs, and an empty positional word
+                // never reaches this device at all. Caught here rather
+                // than left to be silently permanent.
+                if alias.is_empty() || alias.starts_with('-') {
+                    return Err(ConfigError::InvalidAlias {
+                        alias: alias.clone(),
+                        device: device.name.clone(),
+                    });
+                }
                 if RESERVED.contains(&alias.as_str()) {
                     return Err(ConfigError::ReservedAlias {
                         alias: alias.clone(),
@@ -476,6 +496,23 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
         // the built-in help text, never to device resolution.
         let toml = KETTLE.replace(r#"name = "kettle""#, r#"name = "help""#);
         assert!(matches!(parse(&toml), Err(ConfigError::ReservedAlias { .. })));
+    }
+
+    #[test]
+    fn refuses_an_empty_alias() {
+        let toml = KETTLE.replace(r#"["k", "чайник"]"#, r#"[""]"#);
+        assert!(matches!(parse(&toml), Err(ConfigError::InvalidAlias { .. })));
+    }
+
+    #[test]
+    fn refuses_an_alias_that_looks_like_a_flag() {
+        // Finding 12: `d3home alias add --json kettle` parses fine today
+        // (`--json` just looks like the alias word to `alias add`'s own
+        // trailing_var_arg parsing), gets written to the config, and can
+        // then never be used: `d3home --json status` has clap consume
+        // `--json` as the global flag long before alias resolution runs.
+        let toml = KETTLE.replace(r#"["k", "чайник"]"#, r#"["--json"]"#);
+        assert!(matches!(parse(&toml), Err(ConfigError::InvalidAlias { .. })));
     }
 
     #[test]
