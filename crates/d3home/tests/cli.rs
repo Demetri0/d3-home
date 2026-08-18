@@ -13,6 +13,24 @@ mod support {
     /// one process, so all of them share a pid. Each `KettleSimulator`
     /// binds `127.0.0.1:0`, so the port is unique per test regardless.
     pub fn config_with(addr: std::net::SocketAddr, public_key: &str, token: &str) -> PathBuf {
+        config_with_mac(addr, public_key, token, "aabbccddeeff")
+    }
+
+    /// Like [`config_with`], but lets a test pick its own MAC.
+    ///
+    /// Every other test in this file always has its cached endpoint answer
+    /// successfully, so mDNS is never actually touched and the fixture MAC
+    /// above (which is this project's real reference kettle's MAC) is
+    /// inert. A test that deliberately makes the cached endpoint fail --
+    /// to exercise `connect`'s fallback to discovery, or a reconnect loop
+    /// that goes through it -- is different: on the network this suite was
+    /// developed against, that MAC is *actually discoverable*, and a real
+    /// mDNS scan would find the real device. Nothing here would go on to
+    /// harm it (this project never sends a command a test doesn't mean to),
+    /// but the test's outcome must not depend on whether a real kettle
+    /// happens to be reachable. A MAC no real device could ever advertise
+    /// removes that dependency instead of merely making it unlikely.
+    pub fn config_with_mac(addr: std::net::SocketAddr, public_key: &str, token: &str, mac: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("d3home-cli-{}-{}", std::process::id(), addr.port()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -25,7 +43,7 @@ mod support {
 name = "kettle"
 aliases = ["k"]
 driver = "syncleo"
-mac = "aabbccddeeff"
+mac = "{mac}"
 token = "{token}"
 
 [devices.cached]
@@ -340,6 +358,107 @@ fn status_against_a_device_that_reports_no_state_exits_with_the_timeout_code() {
         .code(5);
 
     handle.shutdown();
+}
+
+#[test]
+fn status_against_an_absent_device_fails_rather_than_waiting() {
+    // `watch` is the only command that waits and retries when a device
+    // has gone quiet (see `watch_reconnects_after_the_device_goes_silent_and_returns`
+    // below); a one-shot command that waited indefinitely for an absent
+    // kettle would be worse, not better. Shutting the simulator down
+    // immediately leaves a real, bound UDP port with nothing listening --
+    // the same symptom `watch`'s reconnect exists for -- and `status` must
+    // still just fail, the same way it always has: the cached address
+    // times out, `connect` falls back to a real (here: empty) mDNS scan
+    // exactly as it does for any command, and that comes back
+    // `NotFound` -- not `watch`-style waiting.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config =
+        support::config_with_mac(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN), "d3d3d3d3d3d3");
+    handle.shutdown();
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "kettle", "status"])
+        .timeout(std::time::Duration::from_secs(20))
+        .assert()
+        .code(3);
+}
+
+#[test]
+fn watch_reconnects_after_the_device_goes_silent_and_returns() {
+    // The central behaviour this feature exists for: lifting the kettle
+    // off its base cuts its power outright, `watch` must not exit when
+    // that happens, and events from the session that follows the kettle
+    // coming back must still reach the output.
+    use assert_cmd::prelude::*;
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    // A MAC that cannot collide with a real, discoverable device (see
+    // `support::config_with_mac`): the timing below is chosen so the
+    // reconnect always succeeds via the cached endpoint and mDNS is never
+    // actually reached, but if that assumption is ever wrong on a slower
+    // or more loaded machine, this must fail as "not found" rather than
+    // risk finding and handshaking with a real kettle.
+    let config = support::config_with_mac(
+        handle.addr,
+        &hex(&handle.public_wire),
+        &hex(&TOKEN),
+        "d3d3d3d3d3d3",
+    );
+
+    let mut child = std::process::Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "watch"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("d3home watch should spawn");
+
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    // The first session's burst -- proves the initial connection worked.
+    let first = collect_burst_lines(&rx, Duration::from_secs(5));
+    assert!(!first.is_empty(), "no events from the first session");
+
+    // Simulate the kettle being lifted off its base: it stops answering
+    // *anything*, including a fresh handshake, for long enough that the
+    // client's own timers are guaranteed to have declared the session
+    // lost before it "returns to its base". syncleo::session's fixed ping
+    // (3s) and resend (1s x 5 attempts) constants put that at ~8s after
+    // connecting; 9.5s clears that with margin while still landing well
+    // inside the ~3s connect timeout of the reconnect attempt that starts
+    // once the loss is detected, so the cached endpoint always answers
+    // again before that attempt gives up -- this test never needs (and
+    // must never need) a real mDNS fallback to pass.
+    handle.vanish_for(Duration::from_millis(9_500));
+
+    // Generous overall deadline: loss detection (~8s) plus at least one
+    // reconnect attempt has to fit comfortably inside it.
+    let after = collect_burst_lines(&rx, Duration::from_secs(20));
+
+    child.kill().ok();
+    let _ = child.wait();
+    handle.shutdown();
+
+    assert!(!after.is_empty(), "no events reached the output after the device came back");
+    let joined = after.join("\n");
+    assert!(
+        joined.contains(r#""reconnected":true"#),
+        "no reconnect boundary marker in the output: {joined}"
+    );
 }
 
 #[test]
