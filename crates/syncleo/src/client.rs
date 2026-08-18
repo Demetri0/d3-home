@@ -141,12 +141,26 @@ impl Client {
     /// Collect whatever state events arrive within `window` into a
     /// [`DeviceState`]. The protocol has no "query state" command; the
     /// device reports state on its own, so this just listens.
+    ///
+    /// A `DeviceState` with every field still `None` is reported as
+    /// [`Error::NoState`] rather than a hollow success: the post-handshake
+    /// state burst is this project's own assumption about what a Syncleo
+    /// device does, not a documented part of the protocol. If a real
+    /// device doesn't send one, or it lands after `window` closes, this is
+    /// the caller's only way to tell "genuinely learned nothing" apart
+    /// from "the device really has no water, isn't erroring, and so on" --
+    /// both would otherwise print identically as six `unknown` lines with
+    /// exit code 0, and a script would have no way to distinguish them. Any
+    /// field actually set still counts as a real (if partial) success.
     pub fn collect_state(&mut self, window: Duration) -> Result<DeviceState, Error> {
         let mut state = DeviceState::default();
         let deadline = Instant::now() + window;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                if state == DeviceState::default() {
+                    return Err(Error::NoState);
+                }
                 return Ok(state);
             }
             let actions = self.pump(remaining)?;

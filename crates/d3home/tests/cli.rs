@@ -182,6 +182,26 @@ fn status_reports_machine_readable_state() {
 }
 
 #[test]
+fn status_against_a_device_that_reports_no_state_exits_with_the_timeout_code() {
+    // The post-handshake state burst is this project's own assumption
+    // about how a Syncleo device behaves, not a documented part of the
+    // protocol. Before this, a device (or a too-short window) that
+    // produced zero events still printed six "unknown" lines and exited
+    // 0 -- indistinguishable from a real reading where everything happens
+    // to be off/false/absent. A script must be able to tell those apart.
+    let handle = syncleo::simulator::KettleSimulator::spawn_silent(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "kettle", "status"])
+        .assert()
+        .code(5);
+
+    handle.shutdown();
+}
+
+#[test]
 fn a_temperature_outside_the_supported_range_is_a_usage_error() {
     let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
     let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));

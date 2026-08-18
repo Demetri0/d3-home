@@ -119,6 +119,19 @@ impl KettleSimulator {
     /// thread. The device only accepts a handshake whose token matches
     /// `token`.
     pub fn spawn(token: [u8; 16]) -> std::io::Result<KettleHandle> {
+        Self::spawn_with(token, true)
+    }
+
+    /// Like [`spawn`], but the device never sends its post-handshake state
+    /// burst. Exists to test what a real device that doesn't send one
+    /// looks like from the client's side: the burst is this project's own
+    /// assumption about how a Syncleo device behaves, not a documented
+    /// part of the protocol (see [`crate::error::Error::NoState`]).
+    pub fn spawn_silent(token: [u8; 16]) -> std::io::Result<KettleHandle> {
+        Self::spawn_with(token, false)
+    }
+
+    fn spawn_with(token: [u8; 16], send_state_burst: bool) -> std::io::Result<KettleHandle> {
         let socket = UdpSocket::bind("127.0.0.1:0")?;
         socket.set_read_timeout(Some(POLL_INTERVAL))?;
         let addr = socket.local_addr()?;
@@ -138,7 +151,9 @@ impl KettleSimulator {
             let ignore_commands = ignore_commands.clone();
             let valid_acks = valid_acks.clone();
             let stop = stop.clone();
-            thread::spawn(move || run(socket, token, state, ignore_commands, valid_acks, stop))
+            thread::spawn(move || {
+                run(socket, token, state, ignore_commands, valid_acks, stop, send_state_burst)
+            })
         };
 
         Ok(KettleHandle {
@@ -168,6 +183,7 @@ fn run(
     ignore_commands: Arc<AtomicBool>,
     valid_acks: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
+    send_state_burst: bool,
 ) {
     let mut peer: Option<Peer> = None;
     let mut buf = [0u8; 2048];
@@ -187,7 +203,7 @@ fn run(
                     handle_established(&socket, p, &frame, &state, &valid_acks);
                 }
             }
-            _ => handle_handshake(&socket, from, &frame, token, &mut peer, &state),
+            _ => handle_handshake(&socket, from, &frame, token, &mut peer, &state, send_state_burst),
         }
     }
 }
@@ -202,6 +218,7 @@ fn handle_handshake(
     token: [u8; 16],
     peer: &mut Option<Peer>,
     state: &Arc<Mutex<SimulatedState>>,
+    send_state_burst: bool,
 ) {
     let is_handshake_payload =
         frame.head.ty == FrameType::Cmd && frame.payload.len() == 1 + 32 + 16 && frame.payload[0] == 0x00;
@@ -241,7 +258,9 @@ fn handle_handshake(
     let response = encrypt_frame(&keys, 0, FrameType::Cmd, &body).to_bytes();
     let _ = socket.send_to(&response, from);
 
-    send_state_burst(socket, from, &keys, state);
+    if send_state_burst {
+        report_state_burst(socket, from, &keys, state);
+    }
 
     *peer = Some(Peer { addr: from, keys });
 }
@@ -249,7 +268,7 @@ fn handle_handshake(
 /// Report full current state, unprompted, right after the handshake. This
 /// is how a client ever learns anything at all: the protocol has no "query
 /// state" command, only asynchronous reports from the device.
-fn send_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, state: &Arc<Mutex<SimulatedState>>) {
+fn report_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, state: &Arc<Mutex<SimulatedState>>) {
     let snapshot = *state.lock().expect("state lock poisoned");
     let reports: [(u8, Vec<u8>); 4] = [
         (1, vec![ty::MODE, snapshot.mode.as_u8()]),

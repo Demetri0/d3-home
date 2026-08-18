@@ -180,7 +180,13 @@ impl From<syncleo::Error> for AppError {
         match err {
             // The device may still be there; it has simply stopped
             // answering. Indistinguishable from a plain timeout from here.
-            syncleo::Error::Timeout | syncleo::Error::Silence => AppError::Timeout(message),
+            // NoState joins them: the device answered the handshake but
+            // told us nothing at all within the window, which -- absent a
+            // real "query state" command in the protocol -- is the closest
+            // thing to "did not respond" a status check can observe.
+            syncleo::Error::Timeout | syncleo::Error::Silence | syncleo::Error::NoState => {
+                AppError::Timeout(message)
+            }
             syncleo::Error::HandshakeRejected => AppError::BadToken,
             syncleo::Error::Codec(_) | syncleo::Error::Io(_) => AppError::Internal(message),
             syncleo::Error::UnsupportedProtocol { .. }

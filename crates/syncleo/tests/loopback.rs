@@ -71,6 +71,23 @@ fn the_devices_own_acks_are_decrypted_and_validated_by_the_simulator() {
 }
 
 #[test]
+fn a_device_that_sends_no_state_at_all_is_reported_as_an_error_not_a_hollow_success() {
+    // The post-handshake state burst is this project's own assumption
+    // about how a Syncleo device behaves, not a documented part of the
+    // protocol -- there is no "query state" command. A real device that
+    // doesn't send one must not look identical to "everything is really
+    // false/zero/off": both would otherwise print as six `unknown` lines
+    // with exit code 0, and a script has no way to tell them apart.
+    let handle = KettleSimulator::spawn_silent(TOKEN).unwrap();
+    let mut client = connect(&handle, TOKEN).expect("handshake succeeds even with no state burst");
+
+    let err = client.collect_state(Duration::from_millis(200)).expect_err("no events arrived at all");
+    assert!(matches!(err, syncleo::Error::NoState), "got {err:?}");
+
+    handle.shutdown();
+}
+
+#[test]
 fn a_wrong_token_is_rejected() {
     let handle = KettleSimulator::spawn(TOKEN).unwrap();
 

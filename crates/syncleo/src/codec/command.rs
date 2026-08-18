@@ -75,64 +75,74 @@ pub enum Event {
     Unknown { ty: u8, data: Vec<u8> },
 }
 
-fn expect_len(ty: u8, data: &[u8], want: usize) -> Result<(), CodecError> {
-    if data.len() == want {
-        Ok(())
-    } else {
-        Err(CodecError::BadCommandLength { ty, len: data.len() })
-    }
-}
-
 impl Event {
+    /// Decode a frame body (`[command_type, data...]`) into an [`Event`].
+    ///
+    /// An empty body is the one thing this refuses outright: there is no
+    /// command type byte to even look at, so [`CodecError::EmptyBody`] is
+    /// the only error this returns. A *known* command code carrying data of
+    /// an unexpected length degrades to [`Self::Unknown`] instead of
+    /// failing -- same as a command code this client has never heard of.
+    /// The alternative (an `Err` here) meant the whole frame got dropped
+    /// with no diagnostic anywhere: `watch` never saw it, and there was no
+    /// way for an operator to learn a real device sent something this
+    /// client did not expect. `Unknown` surfaces the raw bytes instead.
     pub fn decode(body: &[u8]) -> Result<Self, CodecError> {
         let (&cmd, data) = body.split_first().ok_or(CodecError::EmptyBody)?;
-        let flag = |d: &[u8]| -> Result<bool, CodecError> {
-            expect_len(cmd, d, 1)?;
-            Ok(d[0] == 1)
+        let unknown = || Self::Unknown { ty: cmd, data: data.to_vec() };
+        // The five boolean-flag commands all decode the same one-byte
+        // shape; `make` is which variant to wrap the bit in.
+        let flag = |make: fn(bool) -> Self| match data {
+            [v] => make(*v == 1),
+            _ => unknown(),
         };
 
         Ok(match cmd {
             ty::HANDSHAKE => {
                 if data.len() < 5 {
-                    return Err(CodecError::BadCommandLength { ty: cmd, len: data.len() });
-                }
-                Self::HandshakeResponse {
-                    protocol: u16::from_le_bytes([data[0], data[1]]),
-                    fw_major: data[2],
-                    fw_minor: data[3],
-                    mode: data[4],
+                    unknown()
+                } else {
+                    Self::HandshakeResponse {
+                        protocol: u16::from_le_bytes([data[0], data[1]]),
+                        fw_major: data[2],
+                        fw_minor: data[3],
+                        mode: data[4],
+                    }
                 }
             }
-            ty::MODE => {
-                expect_len(cmd, data, 1)?;
-                match PowerMode::from_u8(data[0]) {
+            ty::MODE => match data {
+                [v] => match PowerMode::from_u8(*v) {
                     Some(m) => Self::Mode(m),
-                    None => Self::Unknown { ty: cmd, data: data.to_vec() },
-                }
-            }
-            ty::TARGET_TEMPERATURE => {
-                expect_len(cmd, data, 2)?;
-                Self::TargetTemperature(data[0])
-            }
-            ty::CURRENT_TEMPERATURE => {
-                expect_len(cmd, data, 2)?;
-                Self::CurrentTemperature(data[0])
-            }
-            ty::ERROR => Self::Error(flag(data)?),
-            ty::WATER => Self::WaterPresent(flag(data)?),
-            ty::BACKLIGHT => Self::Backlight(flag(data)?),
-            ty::CHILD_LOCK => Self::ChildLock(flag(data)?),
-            ty::ACCESS_CONTROL => Self::AccessControl(flag(data)?),
-            ty::HARDWARE => {
-                expect_len(cmd, data, 3)?;
-                Self::Hardware([data[0], data[1], data[2]])
-            }
+                    None => unknown(),
+                },
+                _ => unknown(),
+            },
+            ty::TARGET_TEMPERATURE => match data {
+                [whole, _hundredths] => Self::TargetTemperature(*whole),
+                _ => unknown(),
+            },
+            ty::CURRENT_TEMPERATURE => match data {
+                [whole, _hundredths] => Self::CurrentTemperature(*whole),
+                _ => unknown(),
+            },
+            ty::ERROR => flag(Self::Error),
+            ty::WATER => flag(Self::WaterPresent),
+            ty::BACKLIGHT => flag(Self::Backlight),
+            ty::CHILD_LOCK => flag(Self::ChildLock),
+            ty::ACCESS_CONTROL => flag(Self::AccessControl),
+            ty::HARDWARE => match data {
+                [a, b, c] => Self::Hardware([*a, *b, *c]),
+                _ => unknown(),
+            },
             ty::DIAGNOSTIC => Self::Diagnostic(data.to_vec()),
             ty::PING => {
-                expect_len(cmd, data, 0)?;
-                Self::Ping
+                if data.is_empty() {
+                    Self::Ping
+                } else {
+                    unknown()
+                }
             }
-            other => Self::Unknown { ty: other, data: data.to_vec() },
+            _ => unknown(),
         })
     }
 }
@@ -193,11 +203,17 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_known_command_with_the_wrong_length() {
-        assert!(matches!(
-            Event::decode(&[20, 93]),
-            Err(CodecError::BadCommandLength { ty: 20, len: 1 })
-        ));
+    // Changed from asserting `Err(CodecError::BadCommandLength { .. })`: a
+    // known command code carrying an unexpected data length used to fail
+    // outright, which dropped the whole frame with no diagnostic anywhere
+    // -- `watch` never saw it, and there was no way for an operator to
+    // learn a real device had sent something unexpected. It now degrades
+    // to `Unknown` (same as a command code this client has never heard of
+    // at all) instead of failing, so the raw bytes still reach the
+    // operator. An empty body is different in kind -- there is no command
+    // type byte to even look at -- and stays a hard error.
+    fn a_known_command_with_the_wrong_length_degrades_to_unknown_instead_of_failing() {
+        assert_eq!(Event::decode(&[20, 93]).unwrap(), Event::Unknown { ty: 20, data: vec![93] });
         assert!(matches!(Event::decode(&[]), Err(CodecError::EmptyBody)));
     }
 }

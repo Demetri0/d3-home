@@ -30,6 +30,11 @@ pub enum Error {
     Codec(#[from] CodecError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(
+        "device reported no state at all within the window; it may not send a state report after \
+         the handshake, or its report arrived too late"
+    )]
+    NoState,
     #[error("device advertises curve {curve} protocol {protocol}, which this client was not written for")]
     UnsupportedProtocol { curve: u8, protocol: u16 },
     #[error("service record has no usable address (only link-local addresses, or none at all)")]
