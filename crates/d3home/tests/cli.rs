@@ -233,12 +233,12 @@ fn watch_burst_lines(handle: &syncleo::simulator::KettleHandle, json_flag: &[&st
 }
 
 #[test]
-fn human_watch_output_has_no_diagnostic_line() {
-    // The simulator's burst now includes a diagnostic event (code 145,
-    // mirroring what the real device sends unprompted right after the
-    // handshake); the human `watch` view must not print it. `hardware:
-    // 1.1.4` in the same burst proves the events were actually captured,
-    // not that this test silently saw nothing at all.
+fn human_watch_output_shows_the_diagnostic_decoded() {
+    // The simulator's burst includes a diagnostic event (code 145, mirroring
+    // what the real device sends unprompted right after the handshake) shaped
+    // exactly like a real capture: a 20-byte header then tag/value pairs
+    // `udps=1 IDLE=2 Tmr=3 rtT=4` (see `report_state_burst`). The human
+    // `watch` view must show it decoded, not hide it and not dump raw bytes.
     let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
     let lines = watch_burst_lines(&handle, &[]);
     handle.shutdown();
@@ -246,8 +246,8 @@ fn human_watch_output_has_no_diagnostic_line() {
     assert!(!lines.is_empty(), "watch printed no lines at all");
     let joined = lines.join("\n");
     assert!(
-        !joined.to_lowercase().contains("diagnostic"),
-        "human watch output still mentions diagnostic: {joined}"
+        joined.contains("diagnostic: udps=1 IDLE=2 Tmr=3 rtT=4"),
+        "expected the decoded diagnostic line, got: {joined}"
     );
     assert!(
         joined.contains("hardware: 1.1.4"),
@@ -256,7 +256,7 @@ fn human_watch_output_has_no_diagnostic_line() {
 }
 
 #[test]
-fn json_watch_output_still_carries_the_diagnostic_event() {
+fn json_watch_output_still_carries_the_raw_diagnostic_event() {
     // `--json` is where completeness beats tidiness -- same precedent as
     // `volume` in `status`. The raw hardware array form ([1, 1, 4]) is also
     // pinned here, since only the human view gets the "1.1.4" rendering.
@@ -267,6 +267,22 @@ fn json_watch_output_still_carries_the_diagnostic_event() {
     assert!(!lines.is_empty(), "watch printed no lines at all");
     let joined = lines.join("\n");
     assert!(joined.contains("diagnostic"), "json watch output lost the diagnostic event: {joined}");
+
+    let diagnostic_line = lines
+        .iter()
+        .find(|l| l.contains("\"diagnostic\""))
+        .unwrap_or_else(|| panic!("no diagnostic event in: {joined}"));
+    let value: serde_json::Value = serde_json::from_str(diagnostic_line).expect("diagnostic line is json");
+    assert!(value["diagnostic"].is_array(), "raw diagnostic bytes missing: {value}");
+    assert_eq!(
+        value["diagnostic_decoded"],
+        serde_json::json!([
+            {"tag": "udps", "value": 1},
+            {"tag": "IDLE", "value": 2},
+            {"tag": "Tmr", "value": 3},
+            {"tag": "rtT", "value": 4},
+        ])
+    );
 
     let hardware_line = lines
         .iter()

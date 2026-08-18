@@ -8,7 +8,7 @@
 
 use serde_json::json;
 use syncleo::client::DeviceState;
-use syncleo::codec::command::{Event, PowerMode};
+use syncleo::codec::command::{Event, PowerMode, decode_diagnostic};
 use syncleo::discovery::Found;
 
 use crate::config::{Config, hex_encode};
@@ -83,14 +83,8 @@ pub fn print_state(state: &DeviceState, json: bool) {
 pub fn print_event(event: &Event, json: bool) {
     if json {
         println!("{}", event_json(event));
-    } else if let Some(line) = event_human(event) {
-        println!("{line}");
     } else {
-        // `event_human` returning `None` means this event is deliberately
-        // not shown in the human view (currently only `Event::Diagnostic`,
-        // see its doc comment there) -- nothing was printed, so there is
-        // nothing to flush either.
-        return;
+        println!("{}", event_human(event));
     }
     // `watch` is meant to be piped (into a notifier, a log, `jq`, ...), and
     // stdout is block-buffered rather than line-buffered once it isn't a
@@ -113,7 +107,21 @@ fn event_json(event: &Event) -> serde_json::Value {
         Event::Backlight(b) => json!({"backlight": b}),
         Event::AccessControl(b) => json!({"access_control": b}),
         Event::Hardware(h) => json!({"hardware": h}),
-        Event::Diagnostic(d) => json!({"diagnostic": d}),
+        Event::Diagnostic(d) => {
+            // The raw bytes are the field of record -- unconditionally
+            // present, exactly as before, so nothing that used to be here
+            // is lost. `diagnostic_decoded` is added on top, only when the
+            // payload has the tag/value shape (see `decode_diagnostic`'s
+            // doc comment); a shape that doesn't fit just omits this key
+            // rather than guessing.
+            let mut value = json!({"diagnostic": d});
+            if let Some(pairs) = decode_diagnostic(d) {
+                let decoded: Vec<_> =
+                    pairs.into_iter().map(|(tag, v)| json!({"tag": tag, "value": v})).collect();
+                value["diagnostic_decoded"] = serde_json::Value::Array(decoded);
+            }
+            value
+        }
         Event::Ping => json!({"ping": true}),
         Event::HandshakeResponse { protocol, fw_major, fw_minor, mode } => json!({
             "handshake": {"protocol": protocol, "fw_major": fw_major, "fw_minor": fw_minor, "mode": mode}
@@ -122,10 +130,9 @@ fn event_json(event: &Event) -> serde_json::Value {
     }
 }
 
-/// Render one event as a human line, or `None` when it should not appear in
-/// the human `watch` view at all.
-fn event_human(event: &Event) -> Option<String> {
-    Some(match event {
+/// Render one event as a human line.
+fn event_human(event: &Event) -> String {
+    match event {
         Event::Mode(m) => format!("mode: {}", mode_str(*m)),
         Event::TargetTemperature(t) => format!("target temperature: {t}\u{b0}C"),
         Event::CurrentTemperature(t) => format!("current temperature: {t}\u{b0}C"),
@@ -137,24 +144,32 @@ fn event_human(event: &Event) -> Option<String> {
         // Confirmed against the real device: its vendor app reports "MCU
         // 1.1.4" for the same three bytes this decodes.
         Event::Hardware([major, minor, patch]) => format!("hardware: {major}.{minor}.{patch}"),
-        // Code 145: a 52-byte vendor diagnostic blob the device sends once
-        // per session, right after the state burst. Decoded (see the design
-        // spec's code-145 row): a 20-byte header followed by four 4-byte
-        // ASCII tag / 4-byte little-endian value pairs -- firmware
-        // telemetry meant for the vendor, not the kettle's state. We already
-        // acknowledge and discard it rather than forward it (see
-        // `commands::kettle::watch`); a session-opening dump of 52 numbers
-        // is pure noise in the view whose whole reason to exist is being
-        // less annoying than the vendor app, so it stops showing up here.
-        // `--json` still carries it in full -- same treatment `volume`
-        // already got.
-        Event::Diagnostic(_) => return None,
+        // Code 145: a vendor diagnostic blob the device sends once per
+        // session, right after the state burst -- firmware telemetry meant
+        // for the vendor, not kettle state. We still just acknowledge and
+        // discard it rather than forward it anywhere (see
+        // `commands::kettle::watch`); this only changes how it's *shown*.
+        // Every real capture so far decodes cleanly (see
+        // `decode_diagnostic`'s doc comment): a 20-byte header followed by
+        // 4-byte ASCII tag / 4-byte little-endian value pairs, e.g. `udps=1
+        // IDLE=2`. When a payload doesn't fit that shape -- the device also
+        // sends a bare one-byte `[0]` diagnostic in the same burst, which
+        // never fits -- this falls back to the raw bytes rather than
+        // hiding or guessing at it.
+        Event::Diagnostic(d) => match decode_diagnostic(d) {
+            Some(pairs) => {
+                let rendered =
+                    pairs.iter().map(|(tag, v)| format!("{tag}={v}")).collect::<Vec<_>>().join(" ");
+                format!("diagnostic: {rendered}")
+            }
+            None => format!("diagnostic: {d:?}"),
+        },
         Event::Ping => "ping".to_string(),
         Event::HandshakeResponse { protocol, fw_major, fw_minor, .. } => {
             format!("handshake: protocol {protocol}, firmware {fw_major}.{fw_minor}")
         }
         Event::Unknown { ty, data } => format!("unknown event {ty}: {data:?}"),
-    })
+    }
 }
 
 /// List the configured devices and their aliases -- but never the token,
@@ -229,6 +244,49 @@ fn found_human(f: &Found) -> String {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+    use syncleo::codec::command::Event;
+
+    #[test]
+    fn human_watch_shows_a_decodable_diagnostic_as_tag_value_pairs() {
+        // The same worked example `decode_diagnostic` is golden-tested
+        // against, exercised here through the actual rendering path.
+        let payload: Vec<u8> = vec![
+            255, 2, 0, 0, 172, 56, 0, 0, 192, 111, 65, 4, 0, 0, 0, 0, 157, 47, 54, 3, // header
+            117, 100, 112, 115, 186, 236, 7, 3, // udps = 50851002
+            114, 116, 84, 0, 249, 9, 4, 0, // rtT\0 = 264697
+            112, 112, 84, 0, 52, 211, 11, 0, // ppT\0 = 774964
+            84, 109, 114, 32, 218, 9, 5, 0, // "Tmr " = 330202
+        ];
+        let line = event_human(&Event::Diagnostic(payload));
+        assert_eq!(line, "diagnostic: udps=50851002 rtT=264697 ppT=774964 Tmr =330202");
+    }
+
+    #[test]
+    fn human_watch_falls_back_to_raw_bytes_for_a_diagnostic_that_does_not_decode() {
+        // The one-byte diagnostic the real device also sends in the same
+        // burst never fits the tag/value shape.
+        let line = event_human(&Event::Diagnostic(vec![0]));
+        assert_eq!(line, "diagnostic: [0]");
+    }
+
+    #[test]
+    fn json_watch_keeps_the_raw_diagnostic_bytes_and_adds_the_decoded_form() {
+        let payload = vec![0u8; 20]
+            .into_iter()
+            .chain(*b"IDLE")
+            .chain(7u32.to_le_bytes())
+            .collect::<Vec<u8>>();
+        let value = event_json(&Event::Diagnostic(payload.clone()));
+        assert_eq!(value["diagnostic"], json!(payload));
+        assert_eq!(value["diagnostic_decoded"], json!([{"tag": "IDLE", "value": 7}]));
+    }
+
+    #[test]
+    fn json_watch_omits_the_decoded_form_when_the_payload_does_not_decode() {
+        let value = event_json(&Event::Diagnostic(vec![0]));
+        assert_eq!(value["diagnostic"], json!([0]));
+        assert!(value.get("diagnostic_decoded").is_none());
+    }
 
     fn sample_found() -> Found {
         Found {

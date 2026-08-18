@@ -160,6 +160,132 @@ impl Event {
     }
 }
 
+/// Decode a code-145 vendor diagnostic payload into its tag/value pairs, if
+/// it has the shape confirmed against three real device captures: a 20-byte
+/// header (contents unknown; only its length is fixed) followed by one or
+/// more 4-byte ASCII tag / 4-byte little-endian `u32` value pairs. Every
+/// capture so far was exactly 52 bytes -- 20 + four pairs -- but nothing
+/// pins the pair count at four, so any positive number of complete pairs is
+/// accepted.
+///
+/// This is a *separate* function from [`Event::decode`], not folded into
+/// it: `Event::Diagnostic` keeps carrying the payload raw (so nothing is
+/// ever hidden or lost to a parse the device never asked us to trust), and
+/// callers -- currently `d3home`'s human `watch` view -- decide whether and
+/// how to apply this on top.
+///
+/// Returns `None`, never a best-effort guess, for anything that does not
+/// cleanly fit: too short to hold the header, a length that leaves a
+/// trailing partial pair, or a tag containing a byte outside printable
+/// ASCII once trailing NUL padding is trimmed. Callers are expected to fall
+/// back to showing the raw bytes in that case.
+///
+/// Tags are trimmed of *trailing* NUL bytes only (real captures pad short
+/// names that way, e.g. `rtT\0`) -- nothing else is normalised, since a tag
+/// can genuinely end in a printable space (`Tmr `) and collapsing that would
+/// quietly lose information.
+pub fn decode_diagnostic(payload: &[u8]) -> Option<Vec<(String, u32)>> {
+    const HEADER_LEN: usize = 20;
+    const PAIR_LEN: usize = 8;
+
+    if payload.len() <= HEADER_LEN {
+        return None;
+    }
+    let pairs = &payload[HEADER_LEN..];
+    if !pairs.len().is_multiple_of(PAIR_LEN) {
+        return None;
+    }
+
+    pairs
+        .chunks_exact(PAIR_LEN)
+        .map(|pair| {
+            let (tag, value) = pair.split_at(4);
+            let tag = trim_trailing_nul(tag);
+            if tag.is_empty() || !tag.iter().all(|&b| (0x20..=0x7e).contains(&b)) {
+                return None;
+            }
+            let tag = String::from_utf8(tag.to_vec()).expect("checked printable ASCII above");
+            let value = u32::from_le_bytes(value.try_into().expect("chunk is PAIR_LEN, value half is 4 bytes"));
+            Some((tag, value))
+        })
+        .collect()
+}
+
+fn trim_trailing_nul(bytes: &[u8]) -> &[u8] {
+    let end = bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+    &bytes[..end]
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_the_worked_example_from_a_real_capture() {
+        // Real device capture, verbatim: 20-byte header then four pairs.
+        let payload: Vec<u8> = vec![
+            255, 2, 0, 0, 172, 56, 0, 0, 192, 111, 65, 4, 0, 0, 0, 0, 157, 47, 54, 3, // header
+            117, 100, 112, 115, 186, 236, 7, 3, // udps = 50851002
+            114, 116, 84, 0, 249, 9, 4, 0, // rtT\0 = 264697
+            112, 112, 84, 0, 52, 211, 11, 0, // ppT\0 = 774964
+            84, 109, 114, 32, 218, 9, 5, 0, // "Tmr " = 330202
+        ];
+        assert_eq!(payload.len(), 52);
+        let decoded = decode_diagnostic(&payload).expect("worked example should decode");
+        assert_eq!(
+            decoded,
+            vec![
+                ("udps".to_string(), 50851002),
+                ("rtT".to_string(), 264697),
+                ("ppT".to_string(), 774964),
+                ("Tmr ".to_string(), 330202),
+            ]
+        );
+    }
+
+    #[test]
+    fn trims_nul_padding_but_keeps_a_genuine_trailing_space() {
+        let mut payload = vec![0u8; 20];
+        payload.extend_from_slice(b"IDLE");
+        payload.extend_from_slice(&7u32.to_le_bytes());
+        payload.extend_from_slice(b"Tmr ");
+        payload.extend_from_slice(&8u32.to_le_bytes());
+        let decoded = decode_diagnostic(&payload).unwrap();
+        assert_eq!(decoded, vec![("IDLE".to_string(), 7), ("Tmr ".to_string(), 8)]);
+    }
+
+    #[test]
+    fn a_one_byte_payload_falls_back_instead_of_decoding() {
+        // The real device sends this alongside the 52-byte diagnostic in the
+        // same burst; it does not fit the tag/value shape at all.
+        assert_eq!(decode_diagnostic(&[0]), None);
+    }
+
+    #[test]
+    fn a_trailing_partial_pair_falls_back_instead_of_decoding() {
+        let mut payload = vec![0u8; 20];
+        payload.extend_from_slice(b"IDLE");
+        payload.extend_from_slice(&7u32.to_le_bytes());
+        payload.push(1); // one extra byte: not a full pair
+        assert_eq!(decode_diagnostic(&payload), None);
+    }
+
+    #[test]
+    fn a_non_printable_tag_falls_back_instead_of_decoding() {
+        let mut payload = vec![0u8; 20];
+        payload.extend_from_slice(&[0xFF, 0x01, 0x02, 0x03]);
+        payload.extend_from_slice(&7u32.to_le_bytes());
+        assert_eq!(decode_diagnostic(&payload), None);
+    }
+
+    #[test]
+    fn exactly_the_header_with_no_pairs_falls_back() {
+        // 20 bytes and nothing else: no tag/value pair to show, so this is
+        // not the shape either -- distinct from "zero-length payload".
+        assert_eq!(decode_diagnostic(&[0u8; 20]), None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
