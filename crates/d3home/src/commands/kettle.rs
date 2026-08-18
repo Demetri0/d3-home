@@ -50,6 +50,17 @@ const STATUS_QUIET_WINDOW: Duration = Duration::from_millis(300);
 /// slow," not "the device is gone."
 const STATUS_OVERALL_DEADLINE: Duration = Duration::from_secs(5);
 
+/// The backoff `watch` waits between reconnect attempts once the device
+/// has gone away, starting here and doubling on every further failure
+/// (see [`WATCH_RECONNECT_BACKOFF_CEILING`]). Short enough that a brief
+/// hiccup recovers almost immediately.
+const WATCH_RECONNECT_BACKOFF_INITIAL: Duration = Duration::from_millis(500);
+/// The cap the backoff above grows to and then holds at. A kettle that's
+/// genuinely off its base for a while shouldn't be hit with a full connect
+/// cycle -- a handshake attempt and, if that times out, an mDNS scan --
+/// more than about once every few seconds.
+const WATCH_RECONNECT_BACKOFF_CEILING: Duration = Duration::from_secs(5);
+
 /// Run one kettle action. `action` is whatever followed the device name on
 /// the command line, unexamined until now. `config_path` is threaded down
 /// to `connect` so a freshly discovered endpoint can be cached back into
@@ -116,18 +127,104 @@ fn off(device: &Device, config_path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Stream device events until the connection is lost (or the process is
-/// killed). Each event is handed straight to `output::print_event` as it
-/// arrives -- no buffering -- so this stays a genuine stream: a future
-/// caller (a notifier, a TUI) can swap in a different callback without
-/// this function changing shape.
+/// Stream device events until the process is killed (or a fatal error --
+/// see below -- ends it). Each event is handed straight to
+/// `output::print_event` as it arrives -- no buffering -- so this stays a
+/// genuine stream: a future caller (a notifier, a TUI) can swap in a
+/// different callback without this function changing shape.
+///
+/// A lost connection does not end `watch`. Lifting the kettle off its base
+/// cuts its power outright, and that happens often enough in ordinary use
+/// (see `docs/TODO.md`'s note on why the session can't simply be resumed)
+/// that exiting on it would make `watch` worse than useless -- the whole
+/// point of watching a kettle is not having to notice it went quiet and
+/// restart the command by hand. So a connectivity failure -- a timeout,
+/// silence, or a command going unacknowledged, all indistinguishable from
+/// "the kettle isn't powered right now" -- is reported, waited through
+/// (with backoff; see `retry_with_backoff`), and followed by a fresh
+/// connect cycle: re-resolve the endpoint, handshake again with the same
+/// token, new session. `connect` already falls back to discovery on its
+/// own if the cached address stops answering, exactly as any other
+/// command does.
+///
+/// Only an error retrying can never fix -- a rejected handshake (the token
+/// is wrong), a malformed config, anything internal -- ends `watch`, with
+/// its usual exit code. `is_connectivity_failure` is the one place that
+/// line is drawn.
 fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
     let mut client = connect(device, config_path)?;
-    client.watch(|event| {
-        output::print_event(&event, json);
-        ControlFlow::Continue(())
-    })?;
-    Ok(())
+
+    loop {
+        let result = client.watch(|event| {
+            output::print_event(&event, json);
+            ControlFlow::Continue(())
+        });
+
+        let err = match result {
+            Ok(()) => return Ok(()),
+            Err(err) => AppError::from(err),
+        };
+        if !is_connectivity_failure(&err) {
+            return Err(err);
+        }
+
+        eprintln!("d3home: kettle went away ({err}); waiting for it to come back");
+        client = retry_with_backoff(
+            || connect(device, config_path),
+            |backoff| with_spinner(Phase::WaitingToReconnect, || std::thread::sleep(backoff)),
+        )?;
+        // The device replays its whole post-handshake state burst on
+        // every connection; without this marker in the stream, that
+        // repeated block of events would look like a glitch rather than
+        // what it is.
+        output::print_watch_reconnected(json);
+    }
+}
+
+/// Whether `err` is worth waiting through and retrying in `watch`'s
+/// reconnect loop, as opposed to something retrying can never fix.
+///
+/// Connectivity failures -- the device didn't answer, wasn't found on a
+/// fresh discovery scan, or (having been connected) went silent or
+/// stopped acknowledging -- are all exactly what lifting the kettle off
+/// its base looks like from here, and are worth waiting through.
+/// `NotFound` belongs in this set for the same reason `connect`'s own
+/// `not_found_message` already gives it: a kettle spends much of its life
+/// off its base, so "mDNS found nothing" is far more often that than a
+/// real network fault. Everything else means the identical attempt would
+/// fail the identical way every time: a rejected handshake means the
+/// token is wrong, and a `Usage`/`Device`/`Internal` error means something
+/// in the config or this process is broken, not the network -- looping on
+/// those would only hide a real problem behind a spinner.
+fn is_connectivity_failure(err: &AppError) -> bool {
+    match err {
+        AppError::Timeout(_) | AppError::NotFound(_) => true,
+        AppError::Usage(_) | AppError::BadToken | AppError::Device(_) | AppError::Internal(_) => false,
+    }
+}
+
+/// Retry `attempt` with a growing backoff between failures, until it
+/// succeeds or fails for a reason [`is_connectivity_failure`] says
+/// retrying cannot fix. `sleep` is taken as a parameter, rather than
+/// calling `std::thread::sleep` directly, so a test can replace real
+/// waiting with an instant, recorded no-op and still observe the schedule
+/// this would have waited on -- without spending the wall-clock time on
+/// it.
+fn retry_with_backoff<T>(
+    mut attempt: impl FnMut() -> Result<T, AppError>,
+    mut sleep: impl FnMut(Duration),
+) -> Result<T, AppError> {
+    let mut backoff = WATCH_RECONNECT_BACKOFF_INITIAL;
+    loop {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(err) if is_connectivity_failure(&err) => {
+                sleep(backoff);
+                backoff = (backoff * 2).min(WATCH_RECONNECT_BACKOFF_CEILING);
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 /// `[]` means plain `start` (turn on at the default target); anything else
@@ -553,6 +650,106 @@ mod tests {
 
         let addr = cached_socket_addr(&cached, "kettle").expect("lo always resolves");
         assert!(matches!(addr, SocketAddr::V6(_)));
+    }
+
+    #[test]
+    fn connectivity_failures_are_exactly_timeout_and_not_found() {
+        assert!(is_connectivity_failure(&AppError::Timeout("gone".into())));
+        assert!(is_connectivity_failure(&AppError::NotFound("gone".into())));
+    }
+
+    #[test]
+    fn a_rejected_handshake_a_bad_config_and_a_device_error_are_never_retried() {
+        // These are exactly the errors retrying can never fix -- a wrong
+        // token, a broken config, this process itself being wrong -- and
+        // must end `watch` outright rather than feed the reconnect loop.
+        assert!(!is_connectivity_failure(&AppError::BadToken));
+        assert!(!is_connectivity_failure(&AppError::Usage("bad config".into())));
+        assert!(!is_connectivity_failure(&AppError::Device("nak".into())));
+        assert!(!is_connectivity_failure(&AppError::Internal("bug".into())));
+    }
+
+    #[test]
+    fn retry_with_backoff_returns_ok_immediately_on_the_first_success_without_sleeping() {
+        let mut calls = 0;
+        let mut sleeps: Vec<Duration> = Vec::new();
+        let result: Result<i32, AppError> =
+            retry_with_backoff(|| { calls += 1; Ok(42) }, |d| sleeps.push(d));
+
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(calls, 1);
+        assert!(sleeps.is_empty(), "a first-try success must never wait at all");
+    }
+
+    #[test]
+    fn a_fatal_error_during_a_watch_retry_ends_the_loop_instead_of_looping_forever() {
+        // The scenario the design brief calls out by name: a handshake
+        // rejected while `watch` is retrying must exit -- via
+        // `AppError::BadToken`, which `cli::ExitCode` maps to 4 -- rather
+        // than being treated as one more connectivity hiccup to wait out.
+        let mut attempts = 0;
+        let mut sleeps: Vec<Duration> = Vec::new();
+        let result: Result<(), AppError> = retry_with_backoff(
+            || {
+                attempts += 1;
+                if attempts <= 2 { Err(AppError::Timeout("still gone".into())) } else { Err(AppError::BadToken) }
+            },
+            |d| sleeps.push(d),
+        );
+
+        assert_eq!(attempts, 3, "must stop trying the moment a fatal error appears");
+        assert_eq!(result.unwrap_err().exit_code(), crate::cli::ExitCode::BadToken);
+        assert_eq!(sleeps.len(), 2, "one wait per retryable failure, none after the fatal one");
+    }
+
+    #[test]
+    fn retry_with_backoff_waits_between_every_attempt_growing_up_to_the_ceiling() {
+        // "Does not spin hot": every one of these waits must be a real,
+        // non-zero delay, and the schedule must actually grow -- not fire
+        // back-to-back attempts with the caller's `sleep` reduced to a
+        // no-op.
+        let mut attempts = 0;
+        let mut sleeps: Vec<Duration> = Vec::new();
+        let result: Result<(), AppError> = retry_with_backoff(
+            || {
+                attempts += 1;
+                if attempts <= 4 { Err(AppError::Timeout("still gone".into())) } else { Err(AppError::Usage("stop".into())) }
+            },
+            |d| sleeps.push(d),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(sleeps.len(), 4);
+        assert!(sleeps.iter().all(|d| !d.is_zero()), "every backoff must actually delay: {sleeps:?}");
+        assert_eq!(sleeps[0], WATCH_RECONNECT_BACKOFF_INITIAL);
+        assert_eq!(sleeps[1], WATCH_RECONNECT_BACKOFF_INITIAL * 2);
+        assert_eq!(sleeps[2], WATCH_RECONNECT_BACKOFF_INITIAL * 4);
+        // The fourth wait would be INITIAL * 8 (4s) uncapped, which is
+        // still under the 5s ceiling here -- pinned separately below at a
+        // point that actually crosses it.
+        for pair in sleeps.windows(2) {
+            assert!(pair[1] >= pair[0], "backoff must never shrink: {sleeps:?}");
+        }
+    }
+
+    #[test]
+    fn the_backoff_never_exceeds_its_ceiling() {
+        let mut attempts = 0;
+        let mut sleeps: Vec<Duration> = Vec::new();
+        let _: Result<(), AppError> = retry_with_backoff(
+            || {
+                attempts += 1;
+                if attempts <= 8 { Err(AppError::Timeout("still gone".into())) } else { Err(AppError::BadToken) }
+            },
+            |d| sleeps.push(d),
+        );
+
+        assert_eq!(sleeps.len(), 8);
+        assert!(
+            sleeps.iter().all(|d| *d <= WATCH_RECONNECT_BACKOFF_CEILING),
+            "backoff must be capped at the ceiling: {sleeps:?}"
+        );
+        assert_eq!(*sleeps.last().unwrap(), WATCH_RECONNECT_BACKOFF_CEILING, "it should have reached the cap by the 8th wait");
     }
 
     #[test]
