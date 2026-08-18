@@ -7,6 +7,7 @@ mod cli;
 mod commands;
 mod config;
 mod output;
+mod progress;
 
 use std::path::{Path, PathBuf};
 

@@ -166,17 +166,27 @@ fn status_reports_machine_readable_state() {
     let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
     let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
 
-    let out = Command::cargo_bin("d3home")
+    let output = Command::cargo_bin("d3home")
         .unwrap()
         .args(["--config", config.to_str().unwrap(), "--json", "kettle", "status"])
         .assert()
         .success()
         .get_output()
-        .stdout
         .clone();
 
-    let value: serde_json::Value = serde_json::from_slice(&out).expect("stdout is valid json");
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is valid json");
     assert!(value.get("current_temperature").is_some());
+
+    // `assert_cmd` runs the child with its stderr piped, not a terminal --
+    // exactly the case the progress spinner is required to stay silent in.
+    // If a spinner ever drew here (or forgot to erase itself), this is
+    // where it would show up.
+    assert!(
+        output.stderr.is_empty(),
+        "a successful non-tty run must produce no stderr output at all, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     handle.shutdown();
 }

@@ -17,6 +17,7 @@ use syncleo::transport::{UdpTransport, socket_addr};
 use crate::cli::AppError;
 use crate::config::{Cached, Config, ConfigError, Device, hex_encode};
 use crate::output;
+use crate::progress::{Phase, with_spinner};
 
 /// Confirmed against the vendor app, which offers 30-100 in steps of 5.
 /// The step is deliberately *not* enforced here: the wire format carries a
@@ -71,7 +72,9 @@ pub fn run(device: &Device, action: &[String], json: bool, config_path: &Path) -
 
 fn status(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
     let mut client = connect(device, config_path)?;
-    let state = client.collect_state(STATUS_QUIET_WINDOW, STATUS_OVERALL_DEADLINE)?;
+    let state = with_spinner(Phase::WaitingForState, || {
+        client.collect_state(STATUS_QUIET_WINDOW, STATUS_OVERALL_DEADLINE)
+    })?;
     output::print_state(&state, json);
 
     // The device has its own notion of an error condition (no water,
@@ -91,22 +94,25 @@ fn start(device: &Device, args: &[String], config_path: &Path) -> Result<(), App
     let target = parse_target_temperature(args)?;
 
     let mut client = connect(device, config_path)?;
-    match target {
-        None => client.send(Command::Mode(PowerMode::On))?,
-        Some(temperature) => {
-            // Order matters here: Custom mode first, then the target. Task
-            // 12 verifies this against the real kettle and flips it if the
-            // hardware wants the other order.
-            client.send(Command::Mode(PowerMode::Custom))?;
-            client.send(Command::TargetTemperature(temperature))?;
+    with_spinner(Phase::Sending, || -> Result<(), AppError> {
+        match target {
+            None => client.send(Command::Mode(PowerMode::On))?,
+            Some(temperature) => {
+                // Order matters here: Custom mode first, then the target.
+                // Task 12 verifies this against the real kettle and flips
+                // it if the hardware wants the other order.
+                client.send(Command::Mode(PowerMode::Custom))?;
+                client.send(Command::TargetTemperature(temperature))?;
+            }
         }
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 fn off(device: &Device, config_path: &Path) -> Result<(), AppError> {
     let mut client = connect(device, config_path)?;
-    client.send(Command::Mode(PowerMode::Off))?;
+    with_spinner(Phase::Sending, || client.send(Command::Mode(PowerMode::Off)))?;
     Ok(())
 }
 
@@ -164,7 +170,8 @@ fn connect(device: &Device, config_path: &Path) -> Result<Client, AppError> {
     if let Some(cached) = &device.cached {
         let public_wire = decode_public_key(&cached.public_key, &device.name)?;
         let addr = cached_socket_addr(cached, &device.name)?;
-        match evaluate_cached_attempt(try_connect(addr, public_wire, token)) {
+        let attempt = with_spinner(Phase::Connecting, || try_connect(addr, public_wire, token));
+        match evaluate_cached_attempt(attempt) {
             CachedAttempt::Connected(client) => return Ok(client),
             CachedAttempt::StaleFallBackToDiscovery => {
                 // Fall through to discovery below.
@@ -173,7 +180,7 @@ fn connect(device: &Device, config_path: &Path) -> Result<Client, AppError> {
         }
     }
 
-    let found = discover_device(device)?;
+    let found = with_spinner(Phase::Searching, || discover_device(device))?;
     cache_endpoint(
         config_path,
         &device.name,
@@ -190,7 +197,7 @@ fn connect(device: &Device, config_path: &Path) -> Result<Client, AppError> {
     // `SocketAddr::new`, so a link-local IPv6 destination is never handed
     // to the socket without its scope id.
     let addr = socket_addr(found.address, found.port, found.interface.as_deref())?;
-    try_connect(addr, found.public_wire, token).map_err(Into::into)
+    with_spinner(Phase::Connecting, || try_connect(addr, found.public_wire, token)).map_err(Into::into)
 }
 
 /// Build the socket address for a cached endpoint. A link-local IPv6
