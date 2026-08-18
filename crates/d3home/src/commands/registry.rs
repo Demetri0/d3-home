@@ -45,8 +45,12 @@ fn cache_discovered(config_path: &Path, found: &[Found]) -> Result<(), AppError>
     let mut changed = false;
     for device in &mut config.devices {
         if let Some(f) = found.iter().find(|f| f.mac == device.mac) {
-            device.cached =
-                Some(Cached { address: f.address, port: f.port, public_key: hex_encode(&f.public_wire) });
+            device.cached = Some(Cached {
+                address: f.address,
+                port: f.port,
+                public_key: hex_encode(&f.public_wire),
+                interface: f.interface.clone(),
+            });
             changed = true;
         }
     }
@@ -119,6 +123,7 @@ mod tests {
         Found {
             mac: mac.into(),
             address: Ipv4Addr::new(192, 168, 1, 99).into(),
+            interface: None,
             port: 9999,
             public_wire: [0x55; 32],
             curve: 29,
@@ -140,6 +145,26 @@ mod tests {
         let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("cache was written");
         assert_eq!(cached.port, 9999);
         assert_eq!(cached.public_key, hex_encode(&[0x55; 32]));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn discover_caches_the_interface_of_a_link_local_device() {
+        let dir = std::env::temp_dir()
+            .join(format!("d3home-test-cache-discovered-interface-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(&path, sample_kettle_toml()).unwrap();
+
+        let mut link_local = found("aabbccddeeff");
+        link_local.address = "fe80::dead:beef:dead:beef".parse().unwrap();
+        link_local.interface = Some("enp8s0".into());
+        cache_discovered(&path, &[link_local]).unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("cache was written");
+        assert_eq!(cached.interface.as_deref(), Some("enp8s0"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

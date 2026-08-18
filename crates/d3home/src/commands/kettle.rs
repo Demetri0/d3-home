@@ -12,7 +12,7 @@ use std::time::Duration;
 use syncleo::client::Client;
 use syncleo::codec::command::{Command, PowerMode};
 use syncleo::discovery::{Discovery, Found, MdnsDiscovery};
-use syncleo::transport::UdpTransport;
+use syncleo::transport::{UdpTransport, socket_addr};
 
 use crate::cli::AppError;
 use crate::config::{Cached, Config, ConfigError, Device, hex_encode};
@@ -148,7 +148,7 @@ fn connect(device: &Device, config_path: &Path) -> Result<Client, AppError> {
 
     if let Some(cached) = &device.cached {
         let public_wire = decode_public_key(&cached.public_key, &device.name)?;
-        let addr = SocketAddr::new(cached.address, cached.port);
+        let addr = cached_socket_addr(cached, &device.name)?;
         match evaluate_cached_attempt(try_connect(addr, public_wire, token)) {
             CachedAttempt::Connected(client) => return Ok(client),
             CachedAttempt::StaleFallBackToDiscovery => {
@@ -159,10 +159,39 @@ fn connect(device: &Device, config_path: &Path) -> Result<Client, AppError> {
     }
 
     let found = discover_device(device)?;
-    cache_endpoint(config_path, &device.name, found.address, found.port, found.public_wire);
+    cache_endpoint(
+        config_path,
+        &device.name,
+        found.address,
+        found.port,
+        found.public_wire,
+        found.interface.clone(),
+    );
 
-    let addr = SocketAddr::new(found.address, found.port);
+    // `parse_service` never hands back a link-local address without an
+    // interface (see `discovery::select_address`), so this can't actually
+    // hit the "no scope" error path -- but it still goes through the same
+    // scope-aware constructor as the cached path rather than a bare
+    // `SocketAddr::new`, so a link-local IPv6 destination is never handed
+    // to the socket without its scope id.
+    let addr = socket_addr(found.address, found.port, found.interface.as_deref())?;
     try_connect(addr, found.public_wire, token).map_err(Into::into)
+}
+
+/// Build the socket address for a cached endpoint. A link-local IPv6
+/// address with no recorded interface is turned into a message that names
+/// the device and the fix, rather than the generic
+/// `syncleo::Error::LinkLocalAddressWithoutScope`.
+fn cached_socket_addr(cached: &Cached, device_name: &str) -> Result<SocketAddr, AppError> {
+    socket_addr(cached.address, cached.port, cached.interface.as_deref()).map_err(|err| match err {
+        syncleo::Error::LinkLocalAddressWithoutScope => AppError::Usage(format!(
+            "device '{device_name}' has a cached link-local address ({}) with no interface \
+             recorded; run 'd3home discover' again, or add `interface = \"<name>\"` under \
+             [devices.cached]",
+            cached.address
+        )),
+        other => other.into(),
+    })
 }
 
 /// What to do after trying the cached endpoint, kept as a small pure
@@ -224,8 +253,15 @@ fn discover_device(device: &Device) -> Result<Found, AppError> {
 /// must not fail the command the user actually asked for -- the endpoint
 /// still works for *this* run, caching it is purely an optimisation for
 /// the next one. So this only warns on stderr and carries on.
-fn cache_endpoint(config_path: &Path, device_name: &str, address: IpAddr, port: u16, public_wire: [u8; 32]) {
-    if let Err(err) = try_cache_endpoint(config_path, device_name, address, port, public_wire) {
+fn cache_endpoint(
+    config_path: &Path,
+    device_name: &str,
+    address: IpAddr,
+    port: u16,
+    public_wire: [u8; 32],
+    interface: Option<String>,
+) {
+    if let Err(err) = try_cache_endpoint(config_path, device_name, address, port, public_wire, interface) {
         eprintln!("d3home: warning: could not cache the discovered endpoint for '{device_name}': {err}");
     }
 }
@@ -236,6 +272,7 @@ fn try_cache_endpoint(
     address: IpAddr,
     port: u16,
     public_wire: [u8; 32],
+    interface: Option<String>,
 ) -> Result<(), AppError> {
     let mut config = Config::load(config_path)?;
     let device = config
@@ -243,7 +280,7 @@ fn try_cache_endpoint(
         .iter_mut()
         .find(|d| d.name == device_name)
         .ok_or_else(|| ConfigError::UnknownDevice { name: device_name.to_string() })?;
-    device.cached = Some(Cached { address, port, public_key: hex_encode(&public_wire) });
+    device.cached = Some(Cached { address, port, public_key: hex_encode(&public_wire), interface });
     config.save(config_path)?;
     Ok(())
 }
@@ -361,7 +398,7 @@ mod tests {
         std::fs::write(&path, sample_kettle_toml("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")).unwrap();
 
         let public_wire = [0x77u8; 32];
-        try_cache_endpoint(&path, "kettle", "192.168.1.42".parse().unwrap(), 8888, public_wire)
+        try_cache_endpoint(&path, "kettle", "192.168.1.42".parse().unwrap(), 8888, public_wire, None)
             .expect("caching a known device must succeed");
 
         let reloaded = Config::load(&path).unwrap();
@@ -369,6 +406,36 @@ mod tests {
         assert_eq!(cached.address, "192.168.1.42".parse::<IpAddr>().unwrap());
         assert_eq!(cached.port, 8888);
         assert_eq!(cached.public_key, hex_encode(&public_wire));
+        assert_eq!(cached.interface, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn caching_a_link_local_discovery_persists_its_interface() {
+        // The real kettle this was fixed against advertises only a
+        // link-local IPv6 address; without the interface surviving the
+        // cache round trip, the next `status` would hit EINVAL all over
+        // again.
+        let dir = std::env::temp_dir()
+            .join(format!("d3home-test-cache-endpoint-interface-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(&path, sample_kettle_toml("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")).unwrap();
+
+        try_cache_endpoint(
+            &path,
+            "kettle",
+            "fe80::dead:beef:dead:beef".parse().unwrap(),
+            8888,
+            [0x77u8; 32],
+            Some("enp8s0".into()),
+        )
+        .expect("caching a known device must succeed");
+
+        let reloaded = Config::load(&path).unwrap();
+        let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("cache was written");
+        assert_eq!(cached.interface.as_deref(), Some("enp8s0"));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -381,10 +448,62 @@ mod tests {
         let path = dir.join("devices.toml");
         std::fs::write(&path, sample_kettle_toml("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")).unwrap();
 
-        let result =
-            try_cache_endpoint(&path, "teapot", "192.168.1.42".parse().unwrap(), 8888, [0u8; 32]);
+        let result = try_cache_endpoint(
+            &path,
+            "teapot",
+            "192.168.1.42".parse().unwrap(),
+            8888,
+            [0u8; 32],
+            None,
+        );
         assert!(result.is_err(), "caching an endpoint for a device that isn't in the config must fail");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_cached_link_local_address_without_an_interface_is_a_clear_usage_error() {
+        // This is the "clear error the user can act on" the design calls
+        // for: a hand-edited or pre-upgrade config with a link-local
+        // cached address but no interface must fail loudly, not hand a
+        // socket something that will fail with EINVAL two layers down.
+        let cached = Cached {
+            address: "fe80::dead:beef:dead:beef".parse().unwrap(),
+            port: 8888,
+            public_key: "ab".repeat(32),
+            interface: None,
+        };
+
+        let err = cached_socket_addr(&cached, "kettle").unwrap_err();
+        assert_eq!(err.exit_code(), crate::cli::ExitCode::Usage);
+        let message = err.to_string();
+        assert!(message.contains("kettle"), "error should name the device: {message}");
+        assert!(message.contains("interface"), "error should point at the fix: {message}");
+    }
+
+    #[test]
+    fn a_cached_link_local_address_with_an_interface_resolves_to_a_scoped_socket_addr() {
+        let cached = Cached {
+            address: "fe80::dead:beef:dead:beef".parse().unwrap(),
+            port: 8888,
+            public_key: "ab".repeat(32),
+            interface: Some("lo".into()),
+        };
+
+        let addr = cached_socket_addr(&cached, "kettle").expect("lo always resolves");
+        assert!(matches!(addr, SocketAddr::V6(_)));
+    }
+
+    #[test]
+    fn a_cached_global_address_needs_no_interface() {
+        let cached = Cached {
+            address: "192.168.1.42".parse().unwrap(),
+            port: 8888,
+            public_key: "ab".repeat(32),
+            interface: None,
+        };
+
+        let addr = cached_socket_addr(&cached, "kettle").unwrap();
+        assert_eq!(addr, SocketAddr::new("192.168.1.42".parse().unwrap(), 8888));
     }
 }
