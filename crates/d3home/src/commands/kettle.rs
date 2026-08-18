@@ -191,7 +191,12 @@ fn off(device: &Device, config_path: &Path) -> Result<(), AppError> {
 /// this treats that exactly like the callback asking to stop -- quietly,
 /// exit 0, since nobody is left to see either an error or an event.
 fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
-    let mut client = connect(device, config_path)?;
+    // Owned, not borrowed: see the loop below -- every reconnect updates
+    // this with whatever endpoint actually worked, so the *next* reconnect
+    // tries that one first instead of the address `watch` started with.
+    let mut device = device.clone();
+    let (mut client, cached) = connect_with(&device, config_path, MdnsDiscovery::new)?;
+    device.cached = Some(cached);
 
     loop {
         let result = client.watch(|event| match output::print_event(&event, json) {
@@ -208,10 +213,22 @@ fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError
         }
 
         eprintln!("d3home: kettle went away ({err}); waiting for it to come back");
-        client = retry_with_backoff(
-            || connect(device, config_path),
+        // Finding 8: `connect_with` returns the `Cached` endpoint that
+        // actually worked -- whether that was the one already cached or
+        // one just found by discovery -- specifically so this can be
+        // carried into the *next* reconnect attempt. Without this, a
+        // kettle that comes back on a new DHCP lease gets its fresh
+        // address written to the config file (see `cache_endpoint`), but
+        // this loop kept retrying the address it started the process
+        // with: every later reconnect paid the stale cached endpoint's
+        // full connect timeout plus a fresh mDNS scan, for the life of
+        // the process, instead of the one-time cost this pays now.
+        let (new_client, cached) = retry_with_backoff(
+            || connect_with(&device, config_path, MdnsDiscovery::new),
             |backoff| with_spinner(Phase::WaitingToReconnect, || std::thread::sleep(backoff)),
         )?;
+        client = new_client;
+        device.cached = Some(cached);
         // The device replays its whole post-handshake state burst on
         // every connection; without this marker in the stream, that
         // repeated block of events would look like a glitch rather than
@@ -309,7 +326,7 @@ fn parse_target_temperature(args: &[String]) -> Result<Option<u8>, AppError> {
 fn connect(device: &Device, config_path: &Path) -> Result<Client, AppError> {
     // `MdnsDiscovery::new` (binding a multicast socket) is passed as a
     // factory, not called here: see `connect_with`'s doc comment for why.
-    connect_with(device, config_path, MdnsDiscovery::new)
+    connect_with(device, config_path, MdnsDiscovery::new).map(|(client, _cached)| client)
 }
 
 /// Does the work of [`connect`], but takes a *factory* for the
@@ -332,13 +349,17 @@ fn connect_with<D: Discovery>(
     device: &Device,
     config_path: &Path,
     discovery: impl FnOnce() -> Result<D, syncleo::Error>,
-) -> Result<Client, AppError> {
+) -> Result<(Client, Cached), AppError> {
     let token = device.token_bytes()?;
 
     if let Some(cached) = &device.cached {
         let public_wire = decode_public_key(&cached.public_key, &device.name)?;
         match try_cached_endpoint(cached, &device.name, public_wire, token) {
-            CachedAttempt::Connected(client) => return Ok(client),
+            // Paired with the same `Cached` the caller already had --
+            // this is what makes the endpoint reusable across further
+            // reconnects (finding 8; see `commands::kettle::watch`)
+            // without needing to re-derive it from anywhere else.
+            CachedAttempt::Connected(client) => return Ok((client, cached.clone())),
             CachedAttempt::StaleFallBackToDiscovery => {
                 // Fall through to discovery below.
             }
@@ -364,7 +385,15 @@ fn connect_with<D: Discovery>(
     // `SocketAddr::new`, so a link-local IPv6 destination is never handed
     // to the socket without its scope id.
     let addr = socket_addr(found.address, found.port, found.interface.as_deref())?;
-    with_spinner(Phase::Connecting, || try_connect(addr, found.public_wire, token)).map_err(Into::into)
+    let client =
+        with_spinner(Phase::Connecting, || try_connect(addr, found.public_wire, token)).map_err(AppError::from)?;
+    let cached = Cached {
+        address: found.address,
+        port: found.port,
+        public_key: hex_encode(&found.public_wire),
+        interface: found.interface,
+    };
+    Ok((client, cached))
 }
 
 /// Resolve `cached` into a socket address and attempt the handshake against
@@ -776,6 +805,78 @@ mod tests {
             .expect_err("nothing was ever discoverable");
         assert_eq!(err.exit_code(), crate::cli::ExitCode::NotFound);
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_freshly_discovered_endpoint_is_reusable_without_discovery_on_the_next_connect() {
+        // Finding 8: `watch` used to hold onto the `Device` it started
+        // with for its whole life, so even after a reconnect discovered a
+        // new address, the *next* reconnect still tried the original,
+        // known-stale cached endpoint first -- paying its full connect
+        // timeout plus a fresh mDNS scan on every single cycle. The fix
+        // (see `commands::kettle::watch`) carries the `Cached` this
+        // function returns forward into an owned `Device` across
+        // iterations; this pins the piece that makes that work at all:
+        // the `Cached` handed back by a discovery-fallback connect must,
+        // on its own, be enough for the very next `connect_with` call to
+        // succeed as a cache hit, with no discovery involved.
+        const TOKEN: [u8; 16] = [0xc0; 16];
+        let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+
+        let dir = std::env::temp_dir()
+            .join(format!("d3home-test-reused-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        // Deliberately stale, exactly like the sibling tests above: the
+        // first connect_with is guaranteed to fall through to discovery.
+        std::fs::write(
+            &path,
+            format!(
+                "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\n\
+                 token = \"{}\"\n\n[devices.cached]\naddress = \"fe80::dead:beef:dead:beef\"\n\
+                 port = 8888\npublic_key = \"{}\"\ninterface = \"d3home-no-such-iface\"\n",
+                hex_encode(&TOKEN),
+                "ab".repeat(32),
+            ),
+        )
+        .unwrap();
+
+        let config = Config::load(&path).unwrap();
+        let device = config.resolve("kettle").unwrap().clone();
+
+        let found = Found {
+            mac: "aabbccddeeff".into(),
+            address: handle.addr.ip(),
+            interface: None,
+            port: handle.addr.port(),
+            public_wire: handle.public_wire,
+            curve: 29,
+            protocol: 2,
+        };
+
+        let (_client, cached) =
+            connect_with(&device, &path, || Ok::<_, syncleo::Error>(FakeDiscovery(Some(found))))
+                .expect("the first connect must fall back to discovery and succeed");
+        assert_eq!(
+            cached.address,
+            handle.addr.ip(),
+            "the returned endpoint must be the one that actually worked"
+        );
+
+        let mut reconnected_device = device.clone();
+        reconnected_device.cached = Some(cached);
+
+        // A discovery factory that panics if it's ever called: proves the
+        // second connect is a pure cache hit against the freshly
+        // discovered address, with no fallback needed at all.
+        let discovery_must_not_be_called = || -> Result<FakeDiscovery, syncleo::Error> {
+            panic!("discovery must not be needed once the cache holds the freshly discovered endpoint")
+        };
+        connect_with(&reconnected_device, &path, discovery_must_not_be_called)
+            .expect("the freshly discovered endpoint alone must be enough to reconnect");
+
+        handle.shutdown();
         std::fs::remove_dir_all(&dir).ok();
     }
 
