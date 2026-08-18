@@ -59,6 +59,16 @@ pub struct Cached {
     pub address: IpAddr,
     pub port: u16,
     pub public_key: String,
+    /// The interface a link-local IPv6 `address` was seen on, e.g.
+    /// `"enp8s0"`. Stored as a name rather than a kernel interface index
+    /// because indices are reassigned across a reboot or a replugged NIC;
+    /// the name is resolved to whatever index the OS currently has for it
+    /// right before connecting. Always `None` for an address that doesn't
+    /// need a scope id (any IPv4 address, or a globally routable IPv6
+    /// one); required -- and checked at connect time, not here -- for a
+    /// link-local IPv6 address.
+    #[serde(default)]
+    pub interface: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -374,6 +384,34 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
 
         let cached = config.resolve("kettle").unwrap().cached.as_ref().unwrap();
         assert_eq!(cached.port, 8888);
+        assert_eq!(cached.interface, None, "a config written before this field existed still loads");
+    }
+
+    #[test]
+    fn round_trips_the_cached_interface_name() {
+        // The real kettle on the network this was fixed against advertises
+        // only a link-local IPv6 address, which cannot be reached without
+        // the interface it was seen on -- so this has to survive a
+        // save/load cycle, not just a single parse.
+        let dir = std::env::temp_dir()
+            .join(format!("d3home-test-cached-interface-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+
+        let mut config = parse(KETTLE).unwrap();
+        config.devices[0].cached = Some(Cached {
+            address: "fe80::dead:beef:dead:beef".parse().unwrap(),
+            port: 8888,
+            public_key: "ab".into(),
+            interface: Some("enp8s0".into()),
+        });
+        config.save(&path).unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().unwrap();
+        assert_eq!(cached.interface.as_deref(), Some("enp8s0"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
