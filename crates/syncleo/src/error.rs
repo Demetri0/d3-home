@@ -43,4 +43,9 @@ pub enum Error {
     NoUsableAddress,
     #[error("malformed mDNS service record: {0}")]
     BadServiceRecord(String),
+    #[error(
+        "address is link-local IPv6 with no known interface; connecting without a scope id \
+         fails at the OS level (EINVAL)"
+    )]
+    LinkLocalAddressWithoutScope,
 }

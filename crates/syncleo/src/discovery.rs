@@ -21,15 +21,57 @@ pub const SERVICE_TYPE: &str = "_syncleo._udp.local.";
 const SUPPORTED_CURVE: u8 = 29;
 const SUPPORTED_PROTOCOL: u16 = 2;
 
+/// One address advertised for a device, together with whatever interface
+/// scope came with it. `interface` is only ever meaningful for IPv6: an
+/// mDNS responder tags every IPv6 address it advertises with the name of
+/// the interface it saw it on, but never does this for IPv4.
+///
+/// Deliberately network-free: this is `mdns-sd`'s `ScopedIp` reduced to the
+/// two facts `parse_service` needs, so that function stays pure and never
+/// has to reach for the OS or the library's own types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedAddr {
+    pub addr: IpAddr,
+    pub interface: Option<String>,
+}
+
 /// Everything needed to open a session with a device found on the network.
+///
+/// `interface` is `Some` exactly when `address` is a link-local IPv6
+/// address -- that is the only case a socket needs a scope id to connect
+/// at all. It names the interface (e.g. `"enp8s0"`), not its OS-assigned
+/// index: indices are reassigned across a reboot or a replugged NIC, so
+/// anything meant to survive one (this struct, and `[devices.cached]` in
+/// the CLI's config) stores the stable name and resolves it to an index
+/// only right before it's needed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
     pub mac: String,
     pub address: IpAddr,
+    pub interface: Option<String>,
     pub port: u16,
     pub public_wire: [u8; 32],
     pub curve: u8,
     pub protocol: u16,
+}
+
+impl Found {
+    /// The address in the form that can be pasted into `ping` (and, minus
+    /// the interface part, into a config's `[devices.cached].address`):
+    /// plain for a globally usable address, `addr%iface` for a scoped
+    /// link-local one.
+    pub fn address_display(&self) -> String {
+        display_scoped(&self.address, self.interface.as_deref())
+    }
+}
+
+/// Render `addr` the way an operator would type it: plain, or `addr%iface`
+/// when a scope is known. This is the `ping fe80::...%enp8s0` form.
+pub fn display_scoped(addr: &IpAddr, interface: Option<&str>) -> String {
+    match interface {
+        Some(name) => format!("{addr}%{name}"),
+        None => addr.to_string(),
+    }
 }
 
 pub trait Discovery {
@@ -71,8 +113,8 @@ impl Discovery for MdnsDiscovery {
             }
             match receiver.recv_timeout(remaining) {
                 Ok(ServiceEvent::ServiceResolved(info)) => {
-                    let addresses: Vec<IpAddr> =
-                        info.get_addresses().iter().map(ScopedIp::to_ip_addr).collect();
+                    let addresses: Vec<ScopedAddr> =
+                        info.get_addresses().iter().map(scoped_addr).collect();
                     let txt: Vec<(String, String)> = info
                         .get_properties()
                         .iter()
@@ -113,13 +155,33 @@ fn mdns_error(err: mdns_sd::Error) -> Error {
     Error::Io(std::io::Error::other(err))
 }
 
+/// Reduce one of `mdns-sd`'s own `ScopedIp` values to the two facts
+/// `parse_service` needs. IPv4 addresses never carry scope information in
+/// this protocol (the kettle has no reason to advertise one, and Syncleo
+/// only ever needs a scope id for a *link-local IPv6* destination), so this
+/// only ever sets `interface` for the `V6` case.
+fn scoped_addr(scoped: &ScopedIp) -> ScopedAddr {
+    match scoped {
+        ScopedIp::V4(v4) => ScopedAddr { addr: IpAddr::V4(*v4.addr()), interface: None },
+        ScopedIp::V6(v6) => {
+            ScopedAddr { addr: IpAddr::V6(*v6.addr()), interface: Some(v6.scope_id().name.clone()) }
+        }
+        // `ScopedIp` is `#[non_exhaustive]`; a future `mdns-sd` release
+        // could add a variant this was never written for. `to_ip_addr` is
+        // the one thing every variant is guaranteed to have, so fall back
+        // to it with no scope rather than failing to compile against a
+        // dependency bump.
+        other => ScopedAddr { addr: other.to_ip_addr(), interface: None },
+    }
+}
+
 /// Parse one resolved mDNS service record into a [`Found`]. Pure and
 /// network-free: everything `MdnsDiscovery` learns from the wire funnels
 /// through here, so this is where malformed or unsupported records are
 /// rejected.
 pub fn parse_service(
     name: &str,
-    addresses: &[IpAddr],
+    addresses: &[ScopedAddr],
     port: u16,
     txt: &[(String, String)],
 ) -> Result<Found, Error> {
@@ -127,11 +189,7 @@ pub fn parse_service(
     // whatever precedes the first label separator.
     let mac = name.split('.').next().unwrap_or_default().to_string();
 
-    let address = addresses
-        .iter()
-        .copied()
-        .find(|addr| !is_link_local_junk(addr))
-        .ok_or(Error::NoUsableAddress)?;
+    let (address, interface) = select_address(addresses)?;
 
     let public_hex = txt_value(txt, "public")?;
     let curve_str = txt_value(txt, "curve")?;
@@ -150,7 +208,54 @@ pub fn parse_service(
 
     let public_wire = decode_public_key(public_hex)?;
 
-    Ok(Found { mac, address, port, public_wire, curve, protocol })
+    Ok(Found { mac, address, interface, port, public_wire, curve, protocol })
+}
+
+/// Pick the address to connect to, and the interface scope (if any) that
+/// goes with it.
+///
+/// A globally usable address -- IPv4 that isn't `169.254.0.0/16`, or IPv6
+/// that isn't link-local -- always wins: it needs no scope id and works
+/// regardless of which interface the caller ends up sending from. Only
+/// when nothing better was advertised does a link-local IPv6 address get
+/// used, and then only if it carries the interface it was seen on --
+/// without that, a socket can't be connected to it at all (the kernel
+/// rejects the connect with `EINVAL`, unable to tell which link it means),
+/// so that case is rejected here instead of being handed to a socket that
+/// will fail.
+fn select_address(addresses: &[ScopedAddr]) -> Result<(IpAddr, Option<String>), Error> {
+    if let Some(candidate) = addresses.iter().find(|a| is_globally_usable(&a.addr)) {
+        return Ok((candidate.addr, None));
+    }
+
+    let mut saw_scopeless_link_local = false;
+    for candidate in addresses {
+        if is_ipv6_link_local(&candidate.addr) {
+            match &candidate.interface {
+                Some(interface) => return Ok((candidate.addr, Some(interface.clone()))),
+                None => saw_scopeless_link_local = true,
+            }
+        }
+    }
+
+    if saw_scopeless_link_local {
+        return Err(Error::LinkLocalAddressWithoutScope);
+    }
+    Err(Error::NoUsableAddress)
+}
+
+/// A globally usable address: not IPv4 link-local autoconfiguration
+/// (`169.254.0.0/16`, an interface that never got a real address) and not
+/// IPv6 link-local (`fe80::/10`, only ever valid alongside a scope id).
+fn is_globally_usable(addr: &IpAddr) -> bool {
+    match addr {
+        IpAddr::V4(v4) => !v4.is_link_local(),
+        IpAddr::V6(v6) => !v6.is_unicast_link_local(),
+    }
+}
+
+fn is_ipv6_link_local(addr: &IpAddr) -> bool {
+    matches!(addr, IpAddr::V6(v6) if v6.is_unicast_link_local())
 }
 
 fn txt_value<'a>(txt: &'a [(String, String)], key: &str) -> Result<&'a str, Error> {
@@ -158,16 +263,6 @@ fn txt_value<'a>(txt: &'a [(String, String)], key: &str) -> Result<&'a str, Erro
         .find(|(k, _)| k == key)
         .map(|(_, v)| v.as_str())
         .ok_or_else(|| Error::BadServiceRecord(format!("missing TXT key {key:?}")))
-}
-
-/// 169.254.0.0/16 is IPv4 link-local autoconfiguration: an interface that
-/// never got a real address. Useless as a destination for talking to the
-/// kettle.
-fn is_link_local_junk(addr: &IpAddr) -> bool {
-    match addr {
-        IpAddr::V4(v4) => v4.is_link_local(),
-        IpAddr::V6(_) => false,
-    }
 }
 
 fn hex_digit(b: u8) -> Result<u8, Error> {
@@ -199,7 +294,7 @@ fn decode_public_key(hex: &str) -> Result<[u8; 32], Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn txt(public: &str, curve: &str, protocol: &str) -> Vec<(String, String)> {
         vec![
@@ -211,11 +306,25 @@ mod tests {
 
     const PUBLIC: &str = "21d4043d930c3d75140c158c3406257204670512254e6e145eae239f354bdb57";
 
+    fn v4(addr: Ipv4Addr) -> ScopedAddr {
+        ScopedAddr { addr: addr.into(), interface: None }
+    }
+
+    fn v6(addr: Ipv6Addr, interface: Option<&str>) -> ScopedAddr {
+        ScopedAddr { addr: addr.into(), interface: interface.map(str::to_string) }
+    }
+
+    /// The kettle from the field report: it advertises exactly one address,
+    /// and it's link-local.
+    fn kettle_link_local() -> Ipv6Addr {
+        "fe80::dead:beef:dead:beef".parse().unwrap()
+    }
+
     #[test]
     fn reads_a_well_formed_service_record() {
         let found = parse_service(
             "aabbccddeeff._syncleo._udp.local.",
-            &[Ipv4Addr::new(192, 168, 1, 42).into()],
+            &[v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt(PUBLIC, "29", "2"),
         )
@@ -224,6 +333,7 @@ mod tests {
         assert_eq!(found.mac, "aabbccddeeff");
         assert_eq!(found.port, 8888);
         assert_eq!(found.address, IpAddr::from(Ipv4Addr::new(192, 168, 1, 42)));
+        assert_eq!(found.interface, None, "a global address needs no scope");
         assert_eq!(found.public_wire.len(), 32);
     }
 
@@ -231,7 +341,7 @@ mod tests {
     fn skips_link_local_addresses() {
         let found = parse_service(
             "aabbccddeeff._syncleo._udp.local.",
-            &[Ipv4Addr::new(169, 254, 3, 4).into(), Ipv4Addr::new(192, 168, 1, 42).into()],
+            &[v4(Ipv4Addr::new(169, 254, 3, 4)), v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt(PUBLIC, "29", "2"),
         )
@@ -245,11 +355,66 @@ mod tests {
     }
 
     #[test]
+    fn a_global_address_is_preferred_over_a_link_local_ipv6_one() {
+        // The design brief's requirement: even when a usable link-local
+        // IPv6 address (with scope) is on offer, a global address -- IPv4
+        // or IPv6 -- always wins, since it needs no scope id and works
+        // regardless of which interface traffic ends up leaving from.
+        let found = parse_service(
+            "aabbccddeeff._syncleo._udp.local.",
+            &[v6(kettle_link_local(), Some("enp8s0")), v4(Ipv4Addr::new(192, 168, 1, 42))],
+            8888,
+            &txt(PUBLIC, "29", "2"),
+        )
+        .unwrap();
+
+        assert_eq!(found.address, IpAddr::from(Ipv4Addr::new(192, 168, 1, 42)));
+        assert_eq!(found.interface, None);
+    }
+
+    #[test]
+    fn a_link_local_ipv6_address_with_scope_is_accepted_when_nothing_better_is_advertised() {
+        // This is the real kettle's case: it advertises exactly one
+        // address, and it's link-local. Rejecting it outright (the old
+        // "prefer IPv4, else fail" behaviour) would leave nothing to
+        // connect to; the fix is to carry the scope through instead.
+        let found = parse_service(
+            "aabbccddeeff._syncleo._udp.local.",
+            &[v6(kettle_link_local(), Some("enp8s0"))],
+            8888,
+            &txt(PUBLIC, "29", "2"),
+        )
+        .unwrap();
+
+        assert_eq!(found.address, IpAddr::from(kettle_link_local()));
+        assert_eq!(found.interface.as_deref(), Some("enp8s0"));
+    }
+
+    #[test]
+    fn a_link_local_ipv6_address_with_no_scope_information_is_rejected() {
+        // Without a scope id, connecting to this address fails at the OS
+        // level with EINVAL; better to say so clearly here than to hand a
+        // socket something doomed to fail.
+        let err = parse_service(
+            "aabbccddeeff._syncleo._udp.local.",
+            &[v6(kettle_link_local(), None)],
+            8888,
+            &txt(PUBLIC, "29", "2"),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, Error::LinkLocalAddressWithoutScope),
+            "expected LinkLocalAddressWithoutScope, got {err:?}"
+        );
+    }
+
+    #[test]
     fn refuses_protocol_versions_it_was_not_written_for() {
         // Guessing at an unknown protocol version would be worse than saying so.
         assert!(parse_service(
             "aabbccddeeff._syncleo._udp.local.",
-            &[Ipv4Addr::new(192, 168, 1, 42).into()],
+            &[v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt(PUBLIC, "29", "3"),
         )
@@ -257,7 +422,7 @@ mod tests {
 
         assert!(parse_service(
             "aabbccddeeff._syncleo._udp.local.",
-            &[Ipv4Addr::new(192, 168, 1, 42).into()],
+            &[v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt(PUBLIC, "30", "2"),
         )
@@ -268,7 +433,7 @@ mod tests {
     fn refuses_a_record_with_no_usable_address() {
         assert!(parse_service(
             "aabbccddeeff._syncleo._udp.local.",
-            &[Ipv4Addr::new(169, 254, 3, 4).into()],
+            &[v4(Ipv4Addr::new(169, 254, 3, 4))],
             8888,
             &txt(PUBLIC, "29", "2"),
         )
@@ -279,7 +444,7 @@ mod tests {
     fn refuses_a_malformed_public_key() {
         assert!(parse_service(
             "aabbccddeeff._syncleo._udp.local.",
-            &[Ipv4Addr::new(192, 168, 1, 42).into()],
+            &[v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt("abcd", "29", "2"),
         )
