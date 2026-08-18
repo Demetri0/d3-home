@@ -36,6 +36,25 @@ fn fmt_flag(b: Option<bool>) -> &'static str {
     }
 }
 
+/// Write one line to stdout and flush it, without panicking if the write
+/// itself fails.
+///
+/// `println!` (and `writeln!` on the same handle) panics when the
+/// underlying write fails. Rust ignores `SIGPIPE` on startup (`SIG_IGN`)
+/// specifically so a broken pipe surfaces as a normal `io::Error` instead
+/// of killing the process outright -- but the standard printing macros then
+/// turn that `Err` right back into a panic, which exits 101, a code outside
+/// this program's documented 0-6 contract. `watch` is explicitly meant to
+/// be piped (into a notifier, a log, `jq`), so a downstream reader that
+/// goes away early (`| head -1`, a killed notifier, a closed terminal) must
+/// not crash this process; it means "stop watching," not "something broke."
+fn write_line(line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "{line}")?;
+    stdout.flush()
+}
+
 /// Print everything a [`crate::commands::kettle`] status check learned
 /// about the device, either as one JSON object or as human-readable lines.
 pub fn print_state(state: &DeviceState, json: bool) {
@@ -57,7 +76,7 @@ pub fn print_state(state: &DeviceState, json: bool) {
             "error": state.error,
             "child_lock": state.child_lock,
         });
-        println!("{value}");
+        let _ = write_line(&value.to_string());
     } else {
         // No `volume` row here, deliberately. Three real-device readings
         // (empty, a full litre, and straight after boiling to 98°C) all
@@ -69,31 +88,32 @@ pub fn print_state(state: &DeviceState, json: bool) {
         // annoying than the vendor app. The data itself is untouched --
         // `DeviceState::volume` and `Event::Volume` still carry it, `watch`
         // still prints it, and `--json` above still includes it.
-        println!("mode:                {}", state.mode.map(mode_str).unwrap_or("unknown"));
-        println!("current temperature: {}", fmt_temperature(state.current_temperature));
-        println!("target temperature:  {}", fmt_temperature(state.target_temperature));
-        println!("error:               {}", fmt_flag(state.error));
-        println!("child lock:          {}", fmt_flag(state.child_lock));
+        let _ = write_line(&format!("mode:                {}", state.mode.map(mode_str).unwrap_or("unknown")));
+        let _ = write_line(&format!("current temperature: {}", fmt_temperature(state.current_temperature)));
+        let _ = write_line(&format!("target temperature:  {}", fmt_temperature(state.target_temperature)));
+        let _ = write_line(&format!("error:               {}", fmt_flag(state.error)));
+        let _ = write_line(&format!("child lock:          {}", fmt_flag(state.child_lock)));
     }
 }
 
 /// Print a single event as it arrives from [`syncleo::client::Client::watch`].
 /// Called once per event, immediately -- `watch` in `commands::kettle` never
 /// collects events into a buffer before calling this.
-pub fn print_event(event: &Event, json: bool) {
-    if json {
-        println!("{}", event_json(event));
-    } else {
-        println!("{}", event_human(event));
-    }
-    // `watch` is meant to be piped (into a notifier, a log, `jq`, ...), and
-    // stdout is block-buffered rather than line-buffered once it isn't a
-    // terminal. Without an explicit flush here, a consumer reading the pipe
-    // could stall waiting for output that is sitting in this process's
-    // buffer -- exactly the kind of thing that turns "a stream" into "a
-    // stream that only delivers on exit."
-    use std::io::Write as _;
-    let _ = std::io::stdout().flush();
+///
+/// Returns whatever [`write_line`] returns: `Err` means the write itself
+/// failed (most commonly a broken pipe downstream), and the caller -- the
+/// `watch` reconnect loop in `commands::kettle` -- is the one that decides
+/// what that means for the stream as a whole (stop watching; see that
+/// module for why panicking here instead would be the wrong answer).
+/// stdout is flushed as part of every write: `watch` is meant to be piped
+/// (into a notifier, a log, `jq`, ...), and stdout is block-buffered rather
+/// than line-buffered once it isn't a terminal, so without an explicit
+/// flush a consumer reading the pipe could stall waiting for output sitting
+/// in this process's buffer -- exactly the kind of thing that turns "a
+/// stream" into "a stream that only delivers on exit."
+pub fn print_event(event: &Event, json: bool) -> std::io::Result<()> {
+    let line = if json { event_json(event).to_string() } else { event_human(event) };
+    write_line(&line)
 }
 
 fn event_json(event: &Event) -> serde_json::Value {
@@ -180,17 +200,13 @@ fn event_human(event: &Event) -> String {
 /// that repeated block of events would read as a glitch (the same values
 /// reported twice) rather than what it is: a fresh session after the old
 /// one was lost.
-pub fn print_watch_reconnected(json: bool) {
-    if json {
-        println!("{}", reconnected_json());
-    } else {
-        println!("{}", RECONNECTED_HUMAN);
-    }
-    // Same reasoning as `print_event`: `watch` is meant to be piped, and a
-    // block-buffered stdout could sit on this until the next event flushed
-    // it -- or never, if the process is killed first.
-    use std::io::Write as _;
-    let _ = std::io::stdout().flush();
+/// Same panic-avoidance and error-propagation reasoning as [`print_event`]:
+/// `Err` means the write failed (most commonly a broken pipe), and the
+/// caller decides what to do about it rather than this panicking on a
+/// downstream reader that has simply gone away.
+pub fn print_watch_reconnected(json: bool) -> std::io::Result<()> {
+    let line = if json { reconnected_json().to_string() } else { RECONNECTED_HUMAN.to_string() };
+    write_line(&line)
 }
 
 const RECONNECTED_HUMAN: &str = "--- reconnected ---";

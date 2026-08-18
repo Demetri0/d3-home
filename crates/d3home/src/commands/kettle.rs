@@ -151,13 +151,20 @@ fn off(device: &Device, config_path: &Path) -> Result<(), AppError> {
 /// is wrong), a malformed config, anything internal -- ends `watch`, with
 /// its usual exit code. `is_connectivity_failure` is the one place that
 /// line is drawn.
+///
+/// A downstream reader going away (`| head -1`, a killed notifier, a
+/// closed terminal) is a third kind of ending, distinct from both of the
+/// above: `output::print_event`/`output::print_watch_reconnected` report a
+/// failed write instead of panicking on it (see their doc comments), and
+/// this treats that exactly like the callback asking to stop -- quietly,
+/// exit 0, since nobody is left to see either an error or an event.
 fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
     let mut client = connect(device, config_path)?;
 
     loop {
-        let result = client.watch(|event| {
-            output::print_event(&event, json);
-            ControlFlow::Continue(())
+        let result = client.watch(|event| match output::print_event(&event, json) {
+            Ok(()) => ControlFlow::Continue(()),
+            Err(_) => ControlFlow::Break(()),
         });
 
         let err = match result {
@@ -176,8 +183,12 @@ fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError
         // The device replays its whole post-handshake state burst on
         // every connection; without this marker in the stream, that
         // repeated block of events would look like a glitch rather than
-        // what it is.
-        output::print_watch_reconnected(json);
+        // what it is. If even this can't be written, the reader is
+        // already gone -- stop now rather than reconnect once more only
+        // to find the very first event fails the same way.
+        if output::print_watch_reconnected(json).is_err() {
+            return Ok(());
+        }
     }
 }
 
