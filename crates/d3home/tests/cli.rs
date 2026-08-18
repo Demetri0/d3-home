@@ -217,6 +217,25 @@ fn a_temperature_outside_the_supported_range_is_a_usage_error() {
 }
 
 #[test]
+fn a_device_nak_exits_with_the_device_error_code() {
+    // The design allocates exit code 6 to a device NAK/error, distinct
+    // from a timeout (5): the device answered clearly and rejected the
+    // command, which a caller reading exit codes should be able to tell
+    // apart from "the network is flaky."
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    handle.reject_commands();
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "kettle", "start", "80"])
+        .assert()
+        .code(6);
+
+    handle.shutdown();
+}
+
+#[test]
 fn a_wrong_token_exits_with_its_own_code() {
     let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
     let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&[0xFF; 16]));

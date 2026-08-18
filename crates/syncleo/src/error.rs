@@ -24,6 +24,8 @@ pub enum Error {
     Timeout,
     #[error("device rejected the handshake; the token is probably wrong")]
     HandshakeRejected,
+    #[error("device rejected the command (NAK)")]
+    DeviceNak,
     #[error("connection lost: no traffic from the device")]
     Silence,
     #[error(transparent)]

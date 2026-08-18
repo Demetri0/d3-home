@@ -188,6 +188,10 @@ impl From<syncleo::Error> for AppError {
                 AppError::Timeout(message)
             }
             syncleo::Error::HandshakeRejected => AppError::BadToken,
+            // The device answered clearly and rejected the command outright
+            // -- distinct from every Timeout/Silence/NoState case above,
+            // where the most it says is silence.
+            syncleo::Error::DeviceNak => AppError::Device(message),
             syncleo::Error::Codec(_) | syncleo::Error::Io(_) => AppError::Internal(message),
             syncleo::Error::UnsupportedProtocol { .. }
             | syncleo::Error::NoUsableAddress

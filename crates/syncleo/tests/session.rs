@@ -157,6 +157,42 @@ fn declares_the_connection_lost_after_fifteen_silent_seconds() {
 }
 
 #[test]
+fn a_nak_matching_the_pending_frame_surfaces_as_nacked_not_a_silent_drop() {
+    let (mut session, _) = start();
+    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
+    assert!(session.is_connected());
+
+    let pending = session.request(Command::TargetTemperature(200), Millis(100));
+    let seq = Frame::parse(&sent(&pending)[0]).unwrap().head.seq;
+
+    let actions = session.step(Input::Packet(from_device(seq, FrameType::Nak, &[])), Millis(110));
+
+    assert!(
+        actions.iter().any(|a| matches!(a, Action::Nacked(s) if *s == seq)),
+        "a Nak matching the pending frame must surface as Nacked, got {actions:?}"
+    );
+    assert!(session.is_connected(), "a device Nak rejects one command, it does not kill the session");
+}
+
+#[test]
+fn a_nak_that_does_not_match_the_pending_sequence_is_ignored() {
+    let (mut session, _) = start();
+    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
+
+    let pending = session.request(Command::TargetTemperature(80), Millis(100));
+    let seq = Frame::parse(&sent(&pending)[0]).unwrap().head.seq;
+
+    // A Nak for some other sequence entirely -- stale, or for a frame this
+    // session never sent -- must not be mistaken for an answer to the
+    // frame actually pending.
+    let actions =
+        session.step(Input::Packet(from_device(seq.wrapping_add(1), FrameType::Nak, &[])), Millis(110));
+
+    assert!(!actions.iter().any(|a| matches!(a, Action::Nacked(_))));
+    assert!(session.is_connected());
+}
+
+#[test]
 fn treats_a_rejected_handshake_as_a_bad_token() {
     let (mut session, _) = start();
 

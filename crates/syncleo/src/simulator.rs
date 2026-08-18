@@ -52,16 +52,31 @@ pub struct SimulatedState {
     pub water: bool,
 }
 
+/// Everything the background thread and its `KettleHandle` both touch,
+/// bundled into one `Arc` so `run`/`handle_established`/`handle_handshake`
+/// take a single shared reference instead of a growing list of
+/// individually-threaded flags.
+struct Shared {
+    state: Mutex<SimulatedState>,
+    /// From now on, silently drop every `Cmd` frame from an established
+    /// peer instead of acknowledging it. See `KettleHandle::ignore_commands`.
+    ignore_commands: AtomicBool,
+    /// From now on, answer every `Cmd` frame from an established peer with
+    /// a `Nak`. See `KettleHandle::reject_commands`.
+    reject_commands: AtomicBool,
+    /// How many `Ack` frames from the peer have been decrypted and
+    /// accepted as genuine. See `KettleHandle::valid_acks`.
+    valid_acks: AtomicUsize,
+    stop: AtomicBool,
+}
+
 /// A running simulator: an address to point a
 /// [`crate::transport::UdpTransport`] at, and the public key the client
 /// needs to derive the shared session keys.
 pub struct KettleHandle {
     pub addr: SocketAddr,
     pub public_wire: [u8; 32],
-    state: Arc<Mutex<SimulatedState>>,
-    ignore_commands: Arc<AtomicBool>,
-    valid_acks: Arc<AtomicUsize>,
-    stop: Arc<AtomicBool>,
+    shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -69,7 +84,7 @@ impl KettleHandle {
     /// Read the simulator's current state. Safe to call from another thread
     /// while the simulator is running: it is read from a shared lock.
     pub fn state(&self) -> SimulatedState {
-        *self.state.lock().expect("simulator state lock poisoned")
+        *self.shared.state.lock().expect("simulator state lock poisoned")
     }
 
     /// From now on, silently drop every `Cmd` frame from an established
@@ -78,7 +93,17 @@ impl KettleHandle {
     /// when a command is genuinely never delivered, without needing a
     /// separate device that is merely unreachable.
     pub fn ignore_commands(&self) {
-        self.ignore_commands.store(true, Ordering::SeqCst);
+        self.shared.ignore_commands.store(true, Ordering::SeqCst);
+    }
+
+    /// From now on, answer every `Cmd` frame from an established peer with
+    /// a `Nak` instead of an `Ack`, and apply no state change. The
+    /// handshake itself is unaffected. Exists so tests can exercise a real
+    /// device clearly rejecting a command post-handshake (e.g. hardware
+    /// probing its real temperature bounds finding one out of range)
+    /// without hand-crafting frames.
+    pub fn reject_commands(&self) {
+        self.shared.reject_commands.store(true, Ordering::SeqCst);
     }
 
     /// How many `Ack` frames from the peer this simulator has decrypted and
@@ -89,12 +114,12 @@ impl KettleHandle {
     /// `handle_established` returned early on any non-`Cmd` frame without
     /// even decrypting it.
     pub fn valid_acks(&self) -> usize {
-        self.valid_acks.load(Ordering::SeqCst)
+        self.shared.valid_acks.load(Ordering::SeqCst)
     }
 
     /// Stop the simulator thread and wait for it to exit.
     pub fn shutdown(mut self) {
-        self.stop.store(true, Ordering::SeqCst);
+        self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -107,7 +132,7 @@ impl Drop for KettleHandle {
     /// blocking in `drop` (possibly during an unwind) is worse than a
     /// thread that exits a moment later on its own.
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
+        self.shared.stop.store(true, Ordering::SeqCst);
     }
 }
 
@@ -136,35 +161,25 @@ impl KettleSimulator {
         socket.set_read_timeout(Some(POLL_INTERVAL))?;
         let addr = socket.local_addr()?;
 
-        let state = Arc::new(Mutex::new(SimulatedState {
-            mode: PowerMode::Off,
-            target: 100,
-            current: 20,
-            water: true,
-        }));
-        let ignore_commands = Arc::new(AtomicBool::new(false));
-        let valid_acks = Arc::new(AtomicUsize::new(0));
-        let stop = Arc::new(AtomicBool::new(false));
+        let shared = Arc::new(Shared {
+            state: Mutex::new(SimulatedState {
+                mode: PowerMode::Off,
+                target: 100,
+                current: 20,
+                water: true,
+            }),
+            ignore_commands: AtomicBool::new(false),
+            reject_commands: AtomicBool::new(false),
+            valid_acks: AtomicUsize::new(0),
+            stop: AtomicBool::new(false),
+        });
 
         let thread = {
-            let state = state.clone();
-            let ignore_commands = ignore_commands.clone();
-            let valid_acks = valid_acks.clone();
-            let stop = stop.clone();
-            thread::spawn(move || {
-                run(socket, token, state, ignore_commands, valid_acks, stop, send_state_burst)
-            })
+            let shared = shared.clone();
+            thread::spawn(move || run(socket, token, &shared, send_state_burst))
         };
 
-        Ok(KettleHandle {
-            addr,
-            public_wire: public_wire(&DEVICE_PRIVATE),
-            state,
-            ignore_commands,
-            valid_acks,
-            stop,
-            thread: Some(thread),
-        })
+        Ok(KettleHandle { addr, public_wire: public_wire(&DEVICE_PRIVATE), shared, thread: Some(thread) })
     }
 }
 
@@ -176,19 +191,11 @@ struct Peer {
     keys: SessionKeys,
 }
 
-fn run(
-    socket: UdpSocket,
-    token: [u8; 16],
-    state: Arc<Mutex<SimulatedState>>,
-    ignore_commands: Arc<AtomicBool>,
-    valid_acks: Arc<AtomicUsize>,
-    stop: Arc<AtomicBool>,
-    send_state_burst: bool,
-) {
+fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bool) {
     let mut peer: Option<Peer> = None;
     let mut buf = [0u8; 2048];
 
-    while !stop.load(Ordering::SeqCst) {
+    while !shared.stop.load(Ordering::SeqCst) {
         let (n, from) = match socket.recv_from(&mut buf) {
             Ok(v) => v,
             // Timeout (checked at the top of the loop) or a benign ICMP
@@ -199,11 +206,11 @@ fn run(
 
         match &peer {
             Some(p) if p.addr == from => {
-                if !ignore_commands.load(Ordering::SeqCst) {
-                    handle_established(&socket, p, &frame, &state, &valid_acks);
+                if !shared.ignore_commands.load(Ordering::SeqCst) {
+                    handle_established(&socket, p, &frame, shared);
                 }
             }
-            _ => handle_handshake(&socket, from, &frame, token, &mut peer, &state, send_state_burst),
+            _ => handle_handshake(&socket, from, &frame, token, &mut peer, shared, send_state_burst),
         }
     }
 }
@@ -217,7 +224,7 @@ fn handle_handshake(
     frame: &Frame,
     token: [u8; 16],
     peer: &mut Option<Peer>,
-    state: &Arc<Mutex<SimulatedState>>,
+    shared: &Shared,
     send_state_burst: bool,
 ) {
     let is_handshake_payload =
@@ -246,7 +253,7 @@ fn handle_handshake(
         return;
     }
 
-    let mode_byte = state.lock().expect("state lock poisoned").mode.as_u8();
+    let mode_byte = shared.state.lock().expect("state lock poisoned").mode.as_u8();
     let body = vec![
         ty::HANDSHAKE,
         PROTOCOL_VERSION as u8,
@@ -259,7 +266,7 @@ fn handle_handshake(
     let _ = socket.send_to(&response, from);
 
     if send_state_burst {
-        report_state_burst(socket, from, &keys, state);
+        report_state_burst(socket, from, &keys, shared);
     }
 
     *peer = Some(Peer { addr: from, keys });
@@ -268,8 +275,8 @@ fn handle_handshake(
 /// Report full current state, unprompted, right after the handshake. This
 /// is how a client ever learns anything at all: the protocol has no "query
 /// state" command, only asynchronous reports from the device.
-fn report_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, state: &Arc<Mutex<SimulatedState>>) {
-    let snapshot = *state.lock().expect("state lock poisoned");
+fn report_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, shared: &Shared) {
+    let snapshot = *shared.state.lock().expect("state lock poisoned");
     let reports: [(u8, Vec<u8>); 4] = [
         (1, vec![ty::MODE, snapshot.mode.as_u8()]),
         (2, vec![ty::TARGET_TEMPERATURE, snapshot.target, 0]),
@@ -284,32 +291,33 @@ fn report_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, st
 
 /// Handle a frame from an already-handshaken peer.
 ///
-/// A `Cmd` is acknowledged and, if it decodes into a command we track,
-/// applied to the state -- unchanged from before. An `Ack` is the peer
-/// acknowledging one of *our* outgoing frames (the handshake response, or a
-/// state-burst report): decrypted and counted as valid rather than dropped
-/// unread, so the end-to-end tests actually exercise the client's ack
-/// framing instead of merely generating and discarding it. Matching on
-/// `frame.head.ty` up front (rather than, say, "try to decrypt it as an
-/// Ack and see if that succeeds") matters here specifically: `Ack` and
-/// `Nak` carry identical ciphertext for a given sequence, so a check that
-/// only asked "does this decrypt cleanly" could not tell the two apart.
-fn handle_established(
-    socket: &UdpSocket,
-    peer: &Peer,
-    frame: &Frame,
-    state: &Arc<Mutex<SimulatedState>>,
-    valid_acks: &AtomicUsize,
-) {
+/// A `Cmd` is acknowledged (or, with `reject_commands` set, NAK'd) and, if
+/// acknowledged and it decodes into a command we track, applied to the
+/// state. An `Ack` is the peer acknowledging one of *our* outgoing frames
+/// (the handshake response, or a state-burst report): decrypted and
+/// counted as valid rather than dropped unread, so the end-to-end tests
+/// actually exercise the client's ack framing instead of merely generating
+/// and discarding it. Matching on `frame.head.ty` up front (rather than,
+/// say, "try to decrypt it as an Ack and see if that succeeds") matters
+/// here specifically: `Ack` and `Nak` carry identical ciphertext for a
+/// given sequence, so a check that only asked "does this decrypt cleanly"
+/// could not tell the two apart.
+fn handle_established(socket: &UdpSocket, peer: &Peer, frame: &Frame, shared: &Shared) {
     match frame.head.ty {
         FrameType::Cmd => {
             let Ok(body) = decrypt_frame(&peer.keys, frame) else { return };
+
+            if shared.reject_commands.load(Ordering::SeqCst) {
+                let nak = encrypt_frame(&peer.keys, frame.head.seq, FrameType::Nak, &[]).to_bytes();
+                let _ = socket.send_to(&nak, peer.addr);
+                return;
+            }
 
             let ack = encrypt_frame(&peer.keys, frame.head.seq, FrameType::Ack, &[]).to_bytes();
             let _ = socket.send_to(&ack, peer.addr);
 
             if let Ok(event) = Event::decode(&body) {
-                let mut s = state.lock().expect("state lock poisoned");
+                let mut s = shared.state.lock().expect("state lock poisoned");
                 match event {
                     Event::Mode(m) => s.mode = m,
                     Event::TargetTemperature(t) => s.target = t,
@@ -319,7 +327,7 @@ fn handle_established(
         }
         FrameType::Ack => {
             if decrypt_frame(&peer.keys, frame).is_ok() {
-                valid_acks.fetch_add(1, Ordering::SeqCst);
+                shared.valid_acks.fetch_add(1, Ordering::SeqCst);
             }
         }
         FrameType::Aux | FrameType::Nak => {}

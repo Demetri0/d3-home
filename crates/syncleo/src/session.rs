@@ -59,6 +59,15 @@ pub enum Action {
     /// pending frame at a time, so a caller does not need to correlate this
     /// against anything to know it is theirs.
     Acked(u8),
+    /// An outgoing `Cmd` frame we were tracking as pending was rejected by
+    /// the device with a `Nak`, carrying the sequence number it rejected.
+    /// Only meaningful post-handshake: a `Nak` that arrives before the
+    /// session is connected is a rejected token and surfaces as
+    /// `Lost(HandshakeRejected)` instead, never as this. Distinct from a
+    /// resend timing out: the device is alive and answered clearly, it
+    /// just refused this particular command (e.g. a temperature outside
+    /// what the hardware itself accepts) -- the session stays up.
+    Nacked(u8),
     /// The session is done; no more actions will follow until a new one is built.
     Lost(LostReason),
 }
@@ -179,6 +188,19 @@ impl Session {
                     self.dead = true;
                     self.pending = None;
                     actions.push(Action::Lost(LostReason::HandshakeRejected));
+                } else if let Some(pending) = &self.pending
+                    && pending.seq == frame.head.seq
+                {
+                    // The device answered clearly -- it rejected this
+                    // specific command -- so this is not a lost connection:
+                    // no retry would fix it, but the session itself stays
+                    // up. Without this arm the Nak was silently dropped:
+                    // the pending frame kept resending until it exhausted
+                    // its attempts and was reported as a plain timeout,
+                    // hiding the device's actual answer behind what looked
+                    // like a network fault.
+                    self.pending = None;
+                    actions.push(Action::Nacked(frame.head.seq));
                 }
             }
             FrameType::Ack => {

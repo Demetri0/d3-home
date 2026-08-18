@@ -118,6 +118,29 @@ fn a_command_the_device_never_acknowledges_is_reported_as_an_error() {
 }
 
 #[test]
+fn a_command_the_device_naks_is_reported_distinctly_from_a_timeout() {
+    // Scenario from hardware testing: probing the real temperature bounds,
+    // the kettle NAKs an out-of-range `start`. Before this, session.rs
+    // only ever acted on a Nak while still unconnected (a rejected
+    // handshake); a post-handshake Nak was silently dropped, the pending
+    // frame kept resending until it exhausted its attempts, and the CLI
+    // reported a plain timeout -- an operator reading a network fault
+    // where the device had actually given a clear answer.
+    let handle = KettleSimulator::spawn(TOKEN).unwrap();
+    let mut client = connect(&handle, TOKEN).expect("handshake succeeds");
+
+    handle.reject_commands();
+
+    let err = client.send(Command::TargetTemperature(80)).expect_err("must not report success");
+    assert!(
+        matches!(err, syncleo::Error::DeviceNak),
+        "a device Nak must be distinguishable from a timeout, got {err:?}"
+    );
+
+    handle.shutdown();
+}
+
+#[test]
 fn an_unreachable_device_times_out() {
     // Port 1 on loopback: nothing listens there.
     let transport = UdpTransport::connect("127.0.0.1:1".parse().unwrap()).unwrap();

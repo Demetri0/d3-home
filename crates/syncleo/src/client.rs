@@ -131,6 +131,7 @@ impl Client {
             for action in &actions {
                 match action {
                     Action::Acked(_) => return Ok(()),
+                    Action::Nacked(_) => return Err(Error::DeviceNak),
                     Action::Lost(reason) => return Err(lost_to_error(*reason)),
                     _ => {}
                 }
