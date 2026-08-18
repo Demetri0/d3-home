@@ -197,15 +197,9 @@ impl Config {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("devices.toml");
-        let tmp_path = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
+        let (tmp_path, mut tmp_file) = create_temp_file(parent, file_name)?;
 
         let write_result: Result<(), ConfigError> = (|| {
-            let mut tmp_file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&tmp_path)?;
             tmp_file.write_all(text.as_bytes())?;
             tmp_file.sync_all()?;
             Ok(())
@@ -261,6 +255,38 @@ impl Device {
         }
         Ok(bytes)
     }
+}
+
+/// Create a fresh, exclusively-owned temp file next to `dir` for `save` to
+/// write through, mode `0600` from the moment it is created.
+///
+/// Uses `create_new` rather than `create` + `truncate`: `create` happily
+/// opens (and then writes the fresh token through) a symlink another local
+/// user pre-planted at the temp path, pointing at a file of their choosing.
+/// That is unreachable against the real `~/.config/d3home` directory (only
+/// this user can write there), but under `--config /tmp/x.toml` on a
+/// shared `/tmp`, another local user could pre-create
+/// `.x.toml.tmp-<pid>` as a symlink to a file they can read -- `mode(0600)`
+/// is ignored when the target already exists, since `mode()` only governs
+/// permissions at creation. `create_new` fails outright if anything
+/// (including a symlink) already exists at the chosen name, so a random
+/// suffix plus a bounded retry replaces the old pid-based name, which an
+/// attacker could predict and pre-plant before the process even started.
+fn create_temp_file(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, std::fs::File)> {
+    const ATTEMPTS: u32 = 32;
+    for _ in 0..ATTEMPTS {
+        let suffix: u64 = rand::random();
+        let candidate = dir.join(format!(".{file_name}.tmp-{suffix:016x}"));
+        match OpenOptions::new().write(true).create_new(true).mode(0o600).open(&candidate) {
+            Ok(file) => return Ok((candidate, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other(format!(
+        "could not create a unique temp file in {} after {ATTEMPTS} attempts",
+        dir.display()
+    )))
 }
 
 /// Turn a `toml` parse failure into a [`ConfigError::Parse`] that carries
