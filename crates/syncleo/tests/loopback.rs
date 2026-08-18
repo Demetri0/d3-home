@@ -43,7 +43,11 @@ fn reads_state_back_from_the_device() {
         .unwrap();
 
     assert!(state.current_temperature.is_some(), "device reports its temperature");
-    assert!(state.water_present.is_some(), "device reports whether it holds water");
+    // The simulator's default volume byte (42) is deliberately outside
+    // {0, 1}: the old `WaterPresent(bool)` decode would have collapsed it
+    // to `false` via `== 1`. Asserting the exact number here, end to end
+    // through the simulator and the client, pins that it survives intact.
+    assert_eq!(state.volume, Some(42), "the raw volume byte must survive decoding intact");
 
     handle.shutdown();
 }
@@ -88,7 +92,7 @@ fn a_device_that_starts_its_burst_late_still_produces_a_successful_read() {
         .expect("a generous overall deadline must still catch a late burst");
 
     assert!(state.current_temperature.is_some(), "device reports its temperature");
-    assert!(state.water_present.is_some(), "device reports whether it holds water");
+    assert!(state.volume.is_some(), "device reports a volume reading");
 
     handle.shutdown();
 }

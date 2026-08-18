@@ -49,7 +49,13 @@ pub struct SimulatedState {
     pub mode: PowerMode,
     pub target: u8,
     pub current: u8,
-    pub water: bool,
+    /// The raw byte the device sends for code 9 (`Event::Volume`). Set to
+    /// a value other than 0 or 1 on purpose: the old `WaterPresent(bool)`
+    /// decode collapsed anything through `== 1`, so a simulator that only
+    /// ever sent 0 or 1 could never have exercised -- let alone caught --
+    /// that bug. Tests reading this back exercise the same non-boolean
+    /// case a real device showed.
+    pub volume: u8,
 }
 
 /// Everything the background thread and its `KettleHandle` both touch,
@@ -182,7 +188,7 @@ impl KettleSimulator {
                 mode: PowerMode::Off,
                 target: 100,
                 current: 20,
-                water: true,
+                volume: 42,
             }),
             ignore_commands: AtomicBool::new(false),
             reject_commands: AtomicBool::new(false),
@@ -336,7 +342,7 @@ fn report_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, sh
         (1, vec![ty::MODE, snapshot.mode.as_u8()]),
         (2, vec![ty::TARGET_TEMPERATURE, snapshot.target, 0]),
         (3, vec![ty::CURRENT_TEMPERATURE, snapshot.current, 0]),
-        (4, vec![ty::WATER, snapshot.water as u8]),
+        (4, vec![ty::VOLUME, snapshot.volume]),
     ];
     for (seq, body) in reports {
         let frame = encrypt_frame(keys, seq, FrameType::Cmd, &body).to_bytes();
