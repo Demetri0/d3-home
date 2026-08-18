@@ -67,6 +67,15 @@ struct Shared {
     /// From now on, silently drop every `Cmd` frame from an established
     /// peer instead of acknowledging it. See `KettleHandle::ignore_commands`.
     ignore_commands: AtomicBool,
+    /// How many established `Cmd` frames have been decrypted so far,
+    /// counting from 0. Compared against `ack_limit` to implement
+    /// `ignore_commands_after`.
+    commands_seen: AtomicUsize,
+    /// `commands_seen` values `>= ack_limit` are silently dropped instead
+    /// of acknowledged, exactly like `ignore_commands` but only once this
+    /// many commands have already gone through normally. Defaults to
+    /// `usize::MAX` (never triggers). See `KettleHandle::ignore_commands_after`.
+    ack_limit: AtomicUsize,
     /// From now on, answer every `Cmd` frame from an established peer with
     /// a `Nak`. See `KettleHandle::reject_commands`.
     reject_commands: AtomicBool,
@@ -108,6 +117,20 @@ impl KettleHandle {
     /// separate device that is merely unreachable.
     pub fn ignore_commands(&self) {
         self.shared.ignore_commands.store(true, Ordering::SeqCst);
+    }
+
+    /// Acknowledge (and apply) the next `count` `Cmd` frames from an
+    /// established peer exactly as normal, then silently drop every one
+    /// after that -- exactly like `ignore_commands`, but only takes effect
+    /// once `count` commands have already gone through cleanly. The
+    /// handshake itself is unaffected and never counts.
+    ///
+    /// Exists to test a multi-command sequence (like `start <temperature>`
+    /// sending both `TargetTemperature` and `Mode(Custom)`) where an
+    /// earlier command's ack must arrive but a later one's must not,
+    /// without needing a real dropped packet or a timing race.
+    pub fn ignore_commands_after(&self, count: usize) {
+        self.shared.ack_limit.store(count, Ordering::SeqCst);
     }
 
     /// From now on, answer every `Cmd` frame from an established peer with
@@ -208,6 +231,8 @@ impl KettleSimulator {
                 volume: 42,
             }),
             ignore_commands: AtomicBool::new(false),
+            commands_seen: AtomicUsize::new(0),
+            ack_limit: AtomicUsize::new(usize::MAX),
             reject_commands: AtomicBool::new(false),
             valid_acks: AtomicUsize::new(0),
             burst_delay_ms: AtomicU64::new(0),
@@ -426,6 +451,14 @@ fn handle_established(socket: &UdpSocket, peer: &Peer, frame: &Frame, shared: &S
     match frame.head.ty {
         FrameType::Cmd => {
             let Ok(body) = decrypt_frame(&peer.keys, frame) else { return };
+
+            let seen = shared.commands_seen.fetch_add(1, Ordering::SeqCst);
+            if seen >= shared.ack_limit.load(Ordering::SeqCst) {
+                // Silently drop, exactly like `ignore_commands`, but only
+                // once `ignore_commands_after`'s count has been reached:
+                // no ack, no nak, no state change.
+                return;
+            }
 
             if shared.reject_commands.load(Ordering::SeqCst) {
                 let nak = encrypt_frame(&peer.keys, frame.head.seq, FrameType::Nak, &[]).to_bytes();
