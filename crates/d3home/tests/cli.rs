@@ -2,6 +2,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 mod support {
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     /// Write a config pointing at a simulator, with the endpoint pre-cached so
@@ -61,6 +62,13 @@ public_key = "{public_key}"
             ),
         )
         .unwrap();
+        // A real config file is always 0600 (see `Config::save`). Match
+        // that here too: `std::fs::write` leaves the file at whatever the
+        // process's umask allows (typically group/other readable), which
+        // would otherwise spuriously trip the world-readable-config
+        // warning `Config::load` prints (finding 18) in every test in this
+        // file, including the ones that assert a clean stderr.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         path
     }
 }
@@ -593,6 +601,35 @@ fn json_status_output_still_carries_volume() {
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout is valid json");
     assert_eq!(value["volume"], 42, "the simulator's default volume byte should still be reported");
+
+    handle.shutdown();
+}
+
+#[test]
+fn a_world_readable_config_prints_a_warning_but_still_works() {
+    // Finding 18: `save` is careful about 0600 from creation; `load`
+    // checked nothing at all. A config restored from a backup, or copied
+    // with plain `cp` (which doesn't preserve mode), could sit readable by
+    // every other local user while holding a device token, silently.
+    use std::os::unix::fs::PermissionsExt;
+
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let output = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "kettle", "status"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.to_lowercase().contains("chmod"),
+        "expected a permission warning naming the fix on stderr, got: {stderr}"
+    );
 
     handle.shutdown();
 }

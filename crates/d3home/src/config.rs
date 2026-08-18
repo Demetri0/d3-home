@@ -180,6 +180,7 @@ impl Config {
     /// Load and validate the registry from `path`.
     pub fn load(path: &Path) -> Result<Config, ConfigError> {
         let text = std::fs::read_to_string(path)?;
+        warn_if_permissions_are_too_loose(path);
         let mut config: Config = toml::from_str(&text).map_err(|e| parse_error(&e, &text))?;
         for device in &mut config.devices {
             device.mac = normalize_mac(&device.mac);
@@ -372,6 +373,46 @@ fn create_temp_file(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, st
         "could not create a unique temp file in {} after {ATTEMPTS} attempts",
         dir.display()
     )))
+}
+
+/// Print a warning to stderr if `path`'s permission bits grant read or
+/// write access to anyone but its owner. Never fails or blocks `load`: a
+/// permission bit that can't even be checked (the file vanished between
+/// `read_to_string` and here, an exotic filesystem) is not a reason to
+/// refuse an otherwise-working config, only to say nothing.
+///
+/// `save` is meticulous about 0600 from the moment a file is created (see
+/// its own doc comment); `load` used to check nothing at all. A config
+/// restored from a backup, copied with plain `cp` (which does not preserve
+/// mode), or written by hand under a permissive umask could sit at, say,
+/// 0644 -- readable by every other local user -- holding a device token,
+/// and every command would read it happily forever without ever saying so.
+/// This does not refuse to load such a file: a wrong permission bit is a
+/// reason to fix the file, not to break every command against an
+/// otherwise-working config.
+fn warn_if_permissions_are_too_loose(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(metadata) = std::fs::metadata(path) else { return };
+    if let Some(warning) = loose_permission_warning(path, metadata.permissions().mode()) {
+        eprintln!("{warning}");
+    }
+}
+
+/// The warning `warn_if_permissions_are_too_loose` prints, or `None` if
+/// `mode`'s owner-only bits (`0600`) are already as tight as `save`
+/// produces. Kept pure and separate from the actual printing so it can be
+/// tested without capturing this process's own stderr.
+fn loose_permission_warning(path: &Path, mode: u32) -> Option<String> {
+    if mode & 0o077 == 0 {
+        return None;
+    }
+    Some(format!(
+        "d3home: warning: {} is readable or writable by more than its owner (mode {:03o}); it \
+         holds a device token -- consider `chmod 600 {}`",
+        path.display(),
+        mode & 0o777,
+        path.display(),
+    ))
 }
 
 /// Turn a `toml` parse failure into a [`ConfigError::Parse`] that carries
@@ -766,6 +807,78 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
         assert_eq!(normalize_mac("AABBCCDDEEFF"), "aabbccddeeff");
         assert_eq!(normalize_mac("AA:BB:CC:DD:EE:FF"), "aabbccddeeff");
         assert_eq!(normalize_mac("aa-bb-cc-dd-ee-ff"), "aabbccddeeff");
+    }
+
+    #[test]
+    fn two_saves_interleaved_around_one_shared_load_lose_the_earlier_one_cleanly() {
+        // Finding 17: nothing coordinates two `d3home` processes saving the
+        // config at once. Each `save` is atomic on its own (create_new
+        // plus rename -- see its doc comment: a reader never sees a torn
+        // file, and a token is never exposed under loose permissions
+        // mid-write), but two writers that both loaded before either one's
+        // write landed still clobber each other with no error and no
+        // merge -- this is a known, accepted tradeoff (lost updates, never
+        // corruption), not something this pins as a bug. What it does pin
+        // is the *shape* of the loss: a clean "later rename wins" outcome,
+        // never a torn or merged file.
+        let dir = std::env::temp_dir()
+            .join(format!("d3home-test-interleaved-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        parse(KETTLE).unwrap().save(&path).unwrap();
+
+        // Both "processes" load the same starting file before either one
+        // writes anything back.
+        let mut first_writer = Config::load(&path).unwrap();
+        let mut second_writer = Config::load(&path).unwrap();
+
+        first_writer.devices[0].aliases.push("first".into());
+        second_writer.devices[0].aliases.push("second".into());
+
+        first_writer.save(&path).unwrap();
+        second_writer.save(&path).unwrap();
+
+        let final_config = Config::load(&path).unwrap();
+        let aliases = &final_config.resolve("kettle").unwrap().aliases;
+        assert_eq!(
+            aliases,
+            &vec!["k".to_string(), "чайник".to_string(), "second".to_string()],
+            "the later save must win outright -- not merge with the earlier one, not corrupt"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_world_or_group_readable_config_gets_a_warning() {
+        let path = Path::new("devices.toml");
+        assert!(loose_permission_warning(path, 0o644).is_some());
+        assert!(loose_permission_warning(path, 0o640).is_some());
+        assert!(loose_permission_warning(path, 0o604).is_some());
+        assert!(loose_permission_warning(path, 0o666).is_some());
+    }
+
+    #[test]
+    fn an_owner_only_config_gets_no_warning() {
+        assert!(loose_permission_warning(Path::new("devices.toml"), 0o600).is_none());
+    }
+
+    #[test]
+    fn a_loose_permission_config_still_loads_successfully() {
+        // Finding 18: the warning must never turn into a hard failure --
+        // an otherwise-working config with the wrong mode still has to
+        // work for every command, the same way it always did.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("d3home-test-loose-perms-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(&path, KETTLE).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(Config::load(&path).is_ok(), "a loose permission must warn, not refuse to load");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
