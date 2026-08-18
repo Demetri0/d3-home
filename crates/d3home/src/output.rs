@@ -83,8 +83,14 @@ pub fn print_state(state: &DeviceState, json: bool) {
 pub fn print_event(event: &Event, json: bool) {
     if json {
         println!("{}", event_json(event));
+    } else if let Some(line) = event_human(event) {
+        println!("{line}");
     } else {
-        println!("{}", event_human(event));
+        // `event_human` returning `None` means this event is deliberately
+        // not shown in the human view (currently only `Event::Diagnostic`,
+        // see its doc comment there) -- nothing was printed, so there is
+        // nothing to flush either.
+        return;
     }
     // `watch` is meant to be piped (into a notifier, a log, `jq`, ...), and
     // stdout is block-buffered rather than line-buffered once it isn't a
@@ -116,8 +122,10 @@ fn event_json(event: &Event) -> serde_json::Value {
     }
 }
 
-fn event_human(event: &Event) -> String {
-    match event {
+/// Render one event as a human line, or `None` when it should not appear in
+/// the human `watch` view at all.
+fn event_human(event: &Event) -> Option<String> {
+    Some(match event {
         Event::Mode(m) => format!("mode: {}", mode_str(*m)),
         Event::TargetTemperature(t) => format!("target temperature: {t}\u{b0}C"),
         Event::CurrentTemperature(t) => format!("current temperature: {t}\u{b0}C"),
@@ -126,14 +134,27 @@ fn event_human(event: &Event) -> String {
         Event::ChildLock(b) => format!("child lock: {}", yes_no(*b)),
         Event::Backlight(b) => format!("backlight: {}", yes_no(*b)),
         Event::AccessControl(b) => format!("access control: {}", yes_no(*b)),
-        Event::Hardware(h) => format!("hardware: {h:?}"),
-        Event::Diagnostic(d) => format!("diagnostic: {d:?}"),
+        // Confirmed against the real device: its vendor app reports "MCU
+        // 1.1.4" for the same three bytes this decodes.
+        Event::Hardware([major, minor, patch]) => format!("hardware: {major}.{minor}.{patch}"),
+        // Code 145: a 52-byte vendor diagnostic blob the device sends once
+        // per session, right after the state burst. Decoded (see the design
+        // spec's code-145 row): a 20-byte header followed by four 4-byte
+        // ASCII tag / 4-byte little-endian value pairs -- firmware
+        // telemetry meant for the vendor, not the kettle's state. We already
+        // acknowledge and discard it rather than forward it (see
+        // `commands::kettle::watch`); a session-opening dump of 52 numbers
+        // is pure noise in the view whose whole reason to exist is being
+        // less annoying than the vendor app, so it stops showing up here.
+        // `--json` still carries it in full -- same treatment `volume`
+        // already got.
+        Event::Diagnostic(_) => return None,
         Event::Ping => "ping".to_string(),
         Event::HandshakeResponse { protocol, fw_major, fw_minor, .. } => {
             format!("handshake: protocol {protocol}, firmware {fw_major}.{fw_minor}")
         }
         Event::Unknown { ty, data } => format!("unknown event {ty}: {data:?}"),
-    }
+    })
 }
 
 /// List the configured devices and their aliases -- but never the token,

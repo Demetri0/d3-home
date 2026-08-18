@@ -161,6 +161,121 @@ fn watch_streams_events_as_they_arrive() {
         serde_json::from_str(line.trim()).expect("each watch line is a JSON event");
 }
 
+/// Collects lines from `rx` until a short quiet gap follows at least one
+/// line, or `overall` elapses with nothing at all. Mirrors the burst's own
+/// "many messages close together, then done" shape rather than reading a
+/// fixed count, so a slow CI box doesn't turn a timing hiccup into a false
+/// failure.
+fn collect_burst_lines(
+    rx: &std::sync::mpsc::Receiver<String>,
+    overall: std::time::Duration,
+) -> Vec<String> {
+    use std::time::{Duration, Instant};
+
+    let mut lines = Vec::new();
+    let deadline = Instant::now() + overall;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match rx.recv_timeout(Duration::from_millis(300).min(remaining)) {
+            Ok(line) => lines.push(line),
+            Err(_) if !lines.is_empty() => break,
+            Err(_) => continue,
+        }
+    }
+    lines
+}
+
+/// Spawn `d3home watch` against `handle`'s simulator with the given extra
+/// flags (e.g. `["--json"]` or `[]`), and return whatever lines it printed
+/// during the post-handshake burst. Kills the child and shuts the simulator
+/// down before returning.
+fn watch_burst_lines(handle: &syncleo::simulator::KettleHandle, json_flag: &[&str]) -> Vec<String> {
+    use assert_cmd::prelude::*;
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    let config_str = config.to_str().unwrap().to_string();
+
+    let mut args: Vec<&str> = vec!["--config", &config_str];
+    args.extend_from_slice(json_flag);
+    args.extend_from_slice(&["kettle", "watch"]);
+
+    let mut child = std::process::Command::cargo_bin("d3home")
+        .unwrap()
+        .args(&args)
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("d3home watch should spawn");
+
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let lines = collect_burst_lines(&rx, Duration::from_secs(5));
+
+    child.kill().ok();
+    let _ = child.wait();
+
+    lines
+}
+
+#[test]
+fn human_watch_output_has_no_diagnostic_line() {
+    // The simulator's burst now includes a diagnostic event (code 145,
+    // mirroring what the real device sends unprompted right after the
+    // handshake); the human `watch` view must not print it. `hardware:
+    // 1.1.4` in the same burst proves the events were actually captured,
+    // not that this test silently saw nothing at all.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let lines = watch_burst_lines(&handle, &[]);
+    handle.shutdown();
+
+    assert!(!lines.is_empty(), "watch printed no lines at all");
+    let joined = lines.join("\n");
+    assert!(
+        !joined.to_lowercase().contains("diagnostic"),
+        "human watch output still mentions diagnostic: {joined}"
+    );
+    assert!(
+        joined.contains("hardware: 1.1.4"),
+        "expected the hardware version rendered as 1.1.4, got: {joined}"
+    );
+}
+
+#[test]
+fn json_watch_output_still_carries_the_diagnostic_event() {
+    // `--json` is where completeness beats tidiness -- same precedent as
+    // `volume` in `status`. The raw hardware array form ([1, 1, 4]) is also
+    // pinned here, since only the human view gets the "1.1.4" rendering.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let lines = watch_burst_lines(&handle, &["--json"]);
+    handle.shutdown();
+
+    assert!(!lines.is_empty(), "watch printed no lines at all");
+    let joined = lines.join("\n");
+    assert!(joined.contains("diagnostic"), "json watch output lost the diagnostic event: {joined}");
+
+    let hardware_line = lines
+        .iter()
+        .find(|l| l.contains("hardware"))
+        .unwrap_or_else(|| panic!("no hardware event in: {joined}"));
+    let value: serde_json::Value = serde_json::from_str(hardware_line).expect("hardware line is json");
+    assert_eq!(value["hardware"], serde_json::json!([1, 1, 4]));
+}
+
 #[test]
 fn status_reports_machine_readable_state() {
     let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
