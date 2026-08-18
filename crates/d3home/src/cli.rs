@@ -196,6 +196,13 @@ impl From<syncleo::Error> for AppError {
             syncleo::Error::UnsupportedProtocol { .. }
             | syncleo::Error::NoUsableAddress
             | syncleo::Error::BadServiceRecord(_) => AppError::NotFound(message),
+            // Reachable when a hand-edited (or pre-upgrade) config's
+            // `[devices.cached]` has a link-local address but no
+            // `interface`; commands::kettle::cached_socket_addr normally
+            // intercepts this first with a message that names the device,
+            // so this arm is the fallback for anywhere else the error
+            // could surface.
+            syncleo::Error::LinkLocalAddressWithoutScope => AppError::Usage(message),
         }
     }
 }
@@ -268,5 +275,9 @@ mod tests {
         assert_eq!(AppError::from(syncleo::Error::Silence).exit_code(), ExitCode::Timeout);
         assert_eq!(AppError::from(syncleo::Error::HandshakeRejected).exit_code(), ExitCode::BadToken);
         assert_eq!(AppError::from(syncleo::Error::NoUsableAddress).exit_code(), ExitCode::NotFound);
+        assert_eq!(
+            AppError::from(syncleo::Error::LinkLocalAddressWithoutScope).exit_code(),
+            ExitCode::Usage
+        );
     }
 }

@@ -169,14 +169,21 @@ pub fn print_found(found: &[Found], json: bool) {
 fn found_json(f: &Found) -> serde_json::Value {
     json!({
         "mac": f.mac,
-        "address": f.address.to_string(),
+        // `address` carries the `addr%iface` form for a scoped link-local
+        // address -- the same thing `ping` and a hand-filled
+        // `[devices.cached]` need -- while `interface` repeats just the
+        // name, which is what actually goes in that config's separate
+        // `interface` field (its `address` can't hold a `%zone` suffix:
+        // that's not part of `IpAddr`'s textual form).
+        "address": f.address_display(),
+        "interface": f.interface,
         "port": f.port,
         "public_key": hex_encode(&f.public_wire),
     })
 }
 
 fn found_human(f: &Found) -> String {
-    format!("{} at {}:{} (public key: {})", f.mac, f.address, f.port, hex_encode(&f.public_wire))
+    format!("{} at {}:{} (public key: {})", f.mac, f.address_display(), f.port, hex_encode(&f.public_wire))
 }
 
 #[cfg(test)]
@@ -188,6 +195,19 @@ mod tests {
         Found {
             mac: "aabbccddeeff".into(),
             address: Ipv4Addr::new(192, 168, 1, 42).into(),
+            interface: None,
+            port: 8888,
+            public_wire: [0xAB; 32],
+            curve: 29,
+            protocol: 2,
+        }
+    }
+
+    fn link_local_found() -> Found {
+        Found {
+            mac: "aabbccddeeff".into(),
+            address: "fe80::dead:beef:dead:beef".parse().unwrap(),
+            interface: Some("enp8s0".into()),
             port: 8888,
             public_wire: [0xAB; 32],
             curve: 29,
@@ -208,5 +228,35 @@ mod tests {
     fn discover_prints_the_public_key_in_json_output() {
         let value = found_json(&sample_found());
         assert_eq!(value["public_key"], hex_encode(&[0xAB; 32]));
+    }
+
+    #[test]
+    fn a_scoped_address_is_rendered_in_the_ping_pasteable_form_in_human_output() {
+        // This is the exact form confirmed against the real device: `ping
+        // fe80::dead:beef:dead:beef%enp8s0` succeeds; the bare address
+        // (what this printed before the fix) does not, because the kernel
+        // can't tell which link a link-local address lives on.
+        let line = found_human(&link_local_found());
+        assert!(
+            line.contains("fe80::dead:beef:dead:beef%enp8s0"),
+            "expected the %iface form in: {line}"
+        );
+    }
+
+    #[test]
+    fn a_scoped_address_is_rendered_in_the_ping_pasteable_form_in_json_output() {
+        let value = found_json(&link_local_found());
+        assert_eq!(value["address"], "fe80::dead:beef:dead:beef%enp8s0");
+        assert_eq!(value["interface"], "enp8s0");
+    }
+
+    #[test]
+    fn a_global_address_has_no_percent_suffix_in_either_output() {
+        let human = found_human(&sample_found());
+        assert!(!human.contains('%'), "a global address needs no scope: {human}");
+
+        let value = found_json(&sample_found());
+        assert_eq!(value["address"], "192.168.1.42");
+        assert!(value["interface"].is_null());
     }
 }
