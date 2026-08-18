@@ -20,6 +20,45 @@ pub fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Decode a hex string into exactly `N` raw bytes, or `None` if it is the
+/// wrong length or contains anything outside `0-9a-fA-F`.
+///
+/// Works byte-by-byte over `hex.as_bytes()` and never slices the `&str`
+/// itself. A `&str` slice like `&hex[i..i + 2]` panics if `i`/`i + 2` don't
+/// land on a UTF-8 character boundary -- and a string can be exactly the
+/// right *byte* length (`hex.len() == N * 2`) while still containing a
+/// multi-byte character (a homoglyph pasted from a chat client, say) that
+/// puts some even offset mid-character. That used to be reachable through a
+/// hand-edited `token` or cached `public_key`: the length guard passed, the
+/// slice panicked, and Rust's slice-boundary panic message quotes the
+/// offending string -- for `token`, printing the secret to stderr on the
+/// way to an exit code (101) outside this program's documented contract.
+/// Indexing raw bytes has no such restriction, so this can't panic on any
+/// input, and any non-hex byte at any position is reported as `None` rather
+/// than decoded.
+pub(crate) fn hex_decode<const N: usize>(hex: &str) -> Option<[u8; N]> {
+    let bytes = hex.as_bytes();
+    if bytes.len() != N * 2 {
+        return None;
+    }
+    let mut out = [0u8; N];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let hi = hex_nibble(bytes[2 * i])?;
+        let lo = hex_nibble(bytes[2 * i + 1])?;
+        *slot = (hi << 4) | lo;
+    }
+    Some(out)
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub devices: Vec<Device>,
@@ -257,20 +296,9 @@ impl Config {
 impl Device {
     /// Decode the hex-encoded token into the 16 raw bytes the protocol uses.
     pub fn token_bytes(&self) -> Result<[u8; 16], ConfigError> {
-        let bad_token = || ConfigError::BadToken {
+        hex_decode::<16>(&self.token).ok_or_else(|| ConfigError::BadToken {
             device: self.name.clone(),
-        };
-
-        if self.token.len() != 32 {
-            return Err(bad_token());
-        }
-
-        let mut bytes = [0u8; 16];
-        for (i, byte) in bytes.iter_mut().enumerate() {
-            let hex_pair = &self.token[i * 2..i * 2 + 2];
-            *byte = u8::from_str_radix(hex_pair, 16).map_err(|_| bad_token())?;
-        }
-        Ok(bytes)
+        })
     }
 }
 
@@ -469,6 +497,28 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
 
         let bad = KETTLE.replace("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf", "nothex");
         assert!(matches!(parse(&bad).unwrap().resolve("k").unwrap().token_bytes(), Err(_)));
+    }
+
+    #[test]
+    fn a_multibyte_token_that_is_the_right_byte_length_is_a_bad_token_not_a_panic() {
+        // Regression test for the token_bytes sibling of 29b4ed2's line_col
+        // fix: ten 3-byte "€" characters plus two ASCII bytes is exactly 32
+        // *bytes*, so the old `self.token.len() != 32` guard passed, but
+        // `&self.token[0..2]` then sliced into the middle of the first "€"
+        // and panicked -- quoting the token itself in the panic message.
+        let token = "€€€€€€€€€€ab";
+        assert_eq!(token.len(), 32, "fixture must be exactly 32 bytes to reach the old guard");
+        assert_eq!(token.chars().count(), 12, "and clearly not 32 *characters*");
+
+        let toml = KETTLE.replace("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf", token);
+        let device = parse(&toml).unwrap().devices.into_iter().next().unwrap();
+
+        let err = device.token_bytes().unwrap_err();
+        assert!(matches!(err, ConfigError::BadToken { .. }));
+        assert!(
+            !err.to_string().contains(token),
+            "the malformed token must never be echoed into the error: {err}"
+        );
     }
 
     #[test]

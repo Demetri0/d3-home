@@ -15,7 +15,7 @@ use syncleo::discovery::{Discovery, Found, MdnsDiscovery};
 use syncleo::transport::{UdpTransport, socket_addr};
 
 use crate::cli::AppError;
-use crate::config::{Cached, Config, ConfigError, Device, hex_encode};
+use crate::config::{Cached, Config, ConfigError, Device, hex_decode, hex_encode};
 use crate::output;
 use crate::progress::{Phase, with_spinner};
 
@@ -423,16 +423,12 @@ fn try_cache_endpoint(
 }
 
 fn decode_public_key(hex: &str, device_name: &str) -> Result<[u8; 32], AppError> {
-    let malformed = || AppError::Usage(format!("device '{device_name}' has a malformed cached public key"));
-
-    if hex.len() != 64 {
-        return Err(malformed());
-    }
-    let mut bytes = [0u8; 32];
-    for (i, byte) in bytes.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(|_| malformed())?;
-    }
-    Ok(bytes)
+    // See `config::hex_decode`'s doc comment: this used to byte-slice `hex`
+    // directly (`&hex[i * 2..i * 2 + 2]`), which panics if the string is
+    // the right *byte* length but contains a multi-byte character at an
+    // even offset -- the identical bug already fixed for `token_bytes`.
+    hex_decode::<32>(hex)
+        .ok_or_else(|| AppError::Usage(format!("device '{device_name}' has a malformed cached public key")))
 }
 
 #[cfg(test)]
@@ -502,6 +498,19 @@ mod tests {
     fn refuses_a_malformed_cached_public_key() {
         assert!(decode_public_key("not hex", "kettle").is_err());
         assert!(decode_public_key("ab", "kettle").is_err());
+    }
+
+    #[test]
+    fn a_multibyte_cached_public_key_that_is_the_right_byte_length_does_not_panic() {
+        // Same mechanism as config::tests's token regression: 21 3-byte "€"
+        // characters plus one ASCII byte is exactly 64 bytes, so the old
+        // `hex.len() != 64` guard passed, but slicing into it panicked
+        // mid-character.
+        let hex = "€".repeat(21) + "a";
+        assert_eq!(hex.len(), 64, "fixture must be exactly 64 bytes to reach the old guard");
+
+        let err = decode_public_key(&hex, "kettle").unwrap_err();
+        assert_eq!(err.exit_code(), crate::cli::ExitCode::Usage);
     }
 
     #[test]
