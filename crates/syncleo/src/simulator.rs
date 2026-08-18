@@ -14,10 +14,10 @@
 //! on the pure-session side.
 
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aes::Aes128;
 use cbc::Decryptor;
@@ -67,6 +67,10 @@ struct Shared {
     /// How many `Ack` frames from the peer have been decrypted and
     /// accepted as genuine. See `KettleHandle::valid_acks`.
     valid_acks: AtomicUsize,
+    /// Milliseconds to hold the post-handshake state burst back by, `0`
+    /// meaning "send it immediately" (the default). See
+    /// `KettleHandle::delay_state_burst`.
+    burst_delay_ms: AtomicU64,
     stop: AtomicBool,
 }
 
@@ -104,6 +108,18 @@ impl KettleHandle {
     /// without hand-crafting frames.
     pub fn reject_commands(&self) {
         self.shared.reject_commands.store(true, Ordering::SeqCst);
+    }
+
+    /// From now on, hold the post-handshake state burst back by `delay`
+    /// instead of sending it immediately after the handshake response.
+    /// The handshake itself is unaffected -- only the burst that normally
+    /// follows it right away. Exists so tests can pin what happens when a
+    /// real device is slow to start its burst, without needing the real
+    /// hardware. Must be called before the client performs its handshake
+    /// (i.e. before `Client::connect`), the same as `ignore_commands` and
+    /// `reject_commands` must be called before the command they affect.
+    pub fn delay_state_burst(&self, delay: Duration) {
+        self.shared.burst_delay_ms.store(delay.as_millis() as u64, Ordering::SeqCst);
     }
 
     /// How many `Ack` frames from the peer this simulator has decrypted and
@@ -171,6 +187,7 @@ impl KettleSimulator {
             ignore_commands: AtomicBool::new(false),
             reject_commands: AtomicBool::new(false),
             valid_acks: AtomicUsize::new(0),
+            burst_delay_ms: AtomicU64::new(0),
             stop: AtomicBool::new(false),
         });
 
@@ -191,11 +208,32 @@ struct Peer {
     keys: SessionKeys,
 }
 
+/// A state burst that has been held back by `delay_state_burst` and is
+/// waiting for its moment, tracked entirely on the run loop's own stack --
+/// nothing here needs to be shared with another thread.
+struct PendingBurst {
+    due: Instant,
+    to: SocketAddr,
+    keys: SessionKeys,
+}
+
 fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bool) {
     let mut peer: Option<Peer> = None;
+    let mut pending_burst: Option<PendingBurst> = None;
     let mut buf = [0u8; 2048];
 
     while !shared.stop.load(Ordering::SeqCst) {
+        // Checked once per iteration -- `recv_from`'s own read timeout
+        // (`POLL_INTERVAL`) upper-bounds how late this can fire relative
+        // to `due`, the same way the rest of this loop is timeout-driven
+        // rather than needing a second thread.
+        if let Some(burst) = &pending_burst
+            && Instant::now() >= burst.due
+        {
+            report_state_burst(&socket, burst.to, &burst.keys, shared);
+            pending_burst = None;
+        }
+
         let (n, from) = match socket.recv_from(&mut buf) {
             Ok(v) => v,
             // Timeout (checked at the top of the loop) or a benign ICMP
@@ -210,7 +248,10 @@ fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bo
                     handle_established(&socket, p, &frame, shared);
                 }
             }
-            _ => handle_handshake(&socket, from, &frame, token, &mut peer, shared, send_state_burst),
+            _ => {
+                pending_burst =
+                    handle_handshake(&socket, from, &frame, token, &mut peer, shared, send_state_burst);
+            }
         }
     }
 }
@@ -218,6 +259,11 @@ fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bo
 /// Try to interpret `frame` as the opening handshake and reply with either
 /// a handshake response (token matched) or a `Nak` (it didn't). Anything
 /// else arriving before a handshake is ignored.
+///
+/// Returns a [`PendingBurst`] when `delay_state_burst` has set a nonzero
+/// delay: the caller (the run loop) is responsible for sending it once due.
+/// With no delay configured, the burst goes out immediately, exactly as
+/// before, and this returns `None`.
 fn handle_handshake(
     socket: &UdpSocket,
     from: SocketAddr,
@@ -226,11 +272,11 @@ fn handle_handshake(
     peer: &mut Option<Peer>,
     shared: &Shared,
     send_state_burst: bool,
-) {
+) -> Option<PendingBurst> {
     let is_handshake_payload =
         frame.head.ty == FrameType::Cmd && frame.payload.len() == 1 + 32 + 16 && frame.payload[0] == 0x00;
     if !is_handshake_payload {
-        return;
+        return None;
     }
 
     let client_public_wire: [u8; 32] = frame.payload[1..33].try_into().expect("checked length");
@@ -250,7 +296,7 @@ fn handle_handshake(
     if block != token {
         let nak = encrypt_frame(&keys, 0, FrameType::Nak, &[]).to_bytes();
         let _ = socket.send_to(&nak, from);
-        return;
+        return None;
     }
 
     let mode_byte = shared.state.lock().expect("state lock poisoned").mode.as_u8();
@@ -265,11 +311,20 @@ fn handle_handshake(
     let response = encrypt_frame(&keys, 0, FrameType::Cmd, &body).to_bytes();
     let _ = socket.send_to(&response, from);
 
-    if send_state_burst {
-        report_state_burst(socket, from, &keys, shared);
-    }
+    let pending = if !send_state_burst {
+        None
+    } else {
+        let delay_ms = shared.burst_delay_ms.load(Ordering::SeqCst);
+        if delay_ms == 0 {
+            report_state_burst(socket, from, &keys, shared);
+            None
+        } else {
+            Some(PendingBurst { due: Instant::now() + Duration::from_millis(delay_ms), to: from, keys: keys.clone() })
+        }
+    };
 
     *peer = Some(Peer { addr: from, keys });
+    pending
 }
 
 /// Report full current state, unprompted, right after the handshake. This
