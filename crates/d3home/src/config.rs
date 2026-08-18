@@ -453,6 +453,39 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
     }
 
     #[test]
+    fn a_multibyte_line_above_a_malformed_token_never_panics_or_leaks() {
+        // Regression test for 29b4ed2: `toml::de::Error::span()` returns a
+        // byte offset into the source, and `line_col` used to slice
+        // `source` at that offset directly. A multi-byte character earlier
+        // in the file (like the "чайник" alias below) shifts every later
+        // byte offset away from the character count a naive slice assumes,
+        // which used to be able to panic mid-slice -- dumping up to 256
+        // bytes of surrounding source, possibly the token itself, into the
+        // panic message. `line_col` now walks `char_indices` instead, so
+        // this must neither panic nor echo the token.
+        let token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf";
+        let toml = format!(
+            "[[devices]]\nname = \"kettle\"\naliases = [\"k\", \"чайник\"]\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"{token}\n"
+        );
+
+        let dir = std::env::temp_dir().join(format!("d3home-test-multibyte-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(&path, &toml).unwrap();
+
+        let err = Config::load(&path).unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(
+            !rendered.contains(token),
+            "the malformed token must never be echoed into an error message: {rendered}"
+        );
+        assert!(matches!(err, ConfigError::Parse(_)));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn saves_with_owner_only_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
