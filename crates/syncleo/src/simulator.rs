@@ -77,6 +77,10 @@ struct Shared {
     /// meaning "send it immediately" (the default). See
     /// `KettleHandle::delay_state_burst`.
     burst_delay_ms: AtomicU64,
+    /// While `Some` and not yet elapsed, every incoming frame -- including
+    /// a fresh handshake attempt -- is silently dropped, exactly as if the
+    /// device had no power at all. See `KettleHandle::vanish_for`.
+    silent_until: Mutex<Option<Instant>>,
     stop: AtomicBool,
 }
 
@@ -126,6 +130,19 @@ impl KettleHandle {
     /// `reject_commands` must be called before the command they affect.
     pub fn delay_state_burst(&self, delay: Duration) {
         self.shared.burst_delay_ms.store(delay.as_millis() as u64, Ordering::SeqCst);
+    }
+
+    /// From now on, silently drop every incoming frame -- including a
+    /// fresh handshake attempt from a new peer -- for `duration`, then
+    /// resume answering normally on its own. No reply of any kind goes
+    /// out while vanished: no ack, no nak, nothing, exactly what lifting a
+    /// real kettle off its base looks like from the network's side. Unlike
+    /// `shutdown`, the socket stays bound to the same address throughout,
+    /// so a test can prove a client's reconnect logic finds the device
+    /// again at the same cached endpoint without needing real discovery.
+    pub fn vanish_for(&self, duration: Duration) {
+        let until = Instant::now() + duration;
+        *self.shared.silent_until.lock().expect("silent_until lock poisoned") = Some(until);
     }
 
     /// How many `Ack` frames from the peer this simulator has decrypted and
@@ -194,6 +211,7 @@ impl KettleSimulator {
             reject_commands: AtomicBool::new(false),
             valid_acks: AtomicUsize::new(0),
             burst_delay_ms: AtomicU64::new(0),
+            silent_until: Mutex::new(None),
             stop: AtomicBool::new(false),
         });
 
@@ -235,6 +253,7 @@ fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bo
         // rather than needing a second thread.
         if let Some(burst) = &pending_burst
             && Instant::now() >= burst.due
+            && !is_silent(shared)
         {
             report_state_burst(&socket, burst.to, &burst.keys, shared);
             pending_burst = None;
@@ -246,6 +265,15 @@ fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bo
             // artifact of loopback UDP: either way, try again.
             Err(_) => continue,
         };
+
+        if is_silent(shared) {
+            // "Off its base": nothing goes out, not even a nak, and a
+            // frame that arrives during this window is simply lost --
+            // exactly as it would be if the device had no power to
+            // receive it with.
+            continue;
+        }
+
         let Ok(frame) = Frame::parse(&buf[..n]) else { continue };
 
         match &peer {
@@ -259,6 +287,18 @@ fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bo
                     handle_handshake(&socket, from, &frame, token, &mut peer, shared, send_state_burst);
             }
         }
+    }
+}
+
+/// Whether `vanish_for`'s window is still in effect. Left set after it
+/// elapses rather than cleared -- checking `Instant::now()` against a
+/// stale `Some(until)` in the past is exactly as cheap as checking a bool,
+/// and there is no second caller for whom "still `Some`" would mean
+/// anything different from "expired."
+fn is_silent(shared: &Shared) -> bool {
+    match *shared.silent_until.lock().expect("silent_until lock poisoned") {
+        Some(until) => Instant::now() < until,
+        None => false,
     }
 }
 
