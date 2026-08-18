@@ -254,21 +254,47 @@ fn parse_target_temperature(args: &[String]) -> Result<Option<u8>, AppError> {
 /// that rejects the handshake (`HandshakeRejected`) is left alone --  a
 /// wrong token is not a stale address, and falling back would silently
 /// mask a real problem behind a slow, confusing retry. A cached endpoint
-/// that simply doesn't answer (`Timeout`) is far more likely a DHCP lease
-/// having moved the device than a device that vanished, so that case falls
-/// back to a fresh mDNS lookup and updates the cache with whatever it
-/// finds.
+/// that simply doesn't answer, or can't even be turned into a socket
+/// address at all (`Timeout`, or an I/O failure -- see
+/// [`evaluate_cached_attempt`]), is far more likely a DHCP lease having
+/// moved the device, or a NIC that got renamed/replugged, than a device
+/// that vanished, so both cases fall back to a fresh mDNS lookup and update
+/// the cache with whatever it finds.
 ///
 /// With no cache at all, this goes straight to mDNS and caches the result
 /// on success.
 fn connect(device: &Device, config_path: &Path) -> Result<Client, AppError> {
+    // `MdnsDiscovery::new` (binding a multicast socket) is passed as a
+    // factory, not called here: see `connect_with`'s doc comment for why.
+    connect_with(device, config_path, MdnsDiscovery::new)
+}
+
+/// Does the work of [`connect`], but takes a *factory* for the
+/// [`Discovery`] implementation to fall back to, rather than an
+/// already-constructed one.
+///
+/// This is the seam the cached-fails -> discover -> re-cache -> connect
+/// path was missing: `MdnsDiscovery::new()` used to be constructed inline
+/// inside this function, with no way to substitute a fake, so that whole
+/// path could only be exercised against a real multicast socket -- which
+/// this project's test suite must never do (a MAC that matches nothing is
+/// how `tests/cli.rs`'s fixtures stay safe today; this is what actually
+/// makes that necessary). A factory rather than a plain `&dyn Discovery`
+/// parameter matters for a reason beyond testability, too: constructing
+/// `MdnsDiscovery` stands up an mDNS daemon and binds a socket, and the
+/// common case here is a cached endpoint that answers immediately --
+/// discovery must not be paid for on every call, only on the ones that
+/// actually fall back to it.
+fn connect_with<D: Discovery>(
+    device: &Device,
+    config_path: &Path,
+    discovery: impl FnOnce() -> Result<D, syncleo::Error>,
+) -> Result<Client, AppError> {
     let token = device.token_bytes()?;
 
     if let Some(cached) = &device.cached {
         let public_wire = decode_public_key(&cached.public_key, &device.name)?;
-        let addr = cached_socket_addr(cached, &device.name)?;
-        let attempt = with_spinner(Phase::Connecting, || try_connect(addr, public_wire, token));
-        match evaluate_cached_attempt(attempt) {
+        match try_cached_endpoint(cached, &device.name, public_wire, token) {
             CachedAttempt::Connected(client) => return Ok(client),
             CachedAttempt::StaleFallBackToDiscovery => {
                 // Fall through to discovery below.
@@ -277,7 +303,8 @@ fn connect(device: &Device, config_path: &Path) -> Result<Client, AppError> {
         }
     }
 
-    let found = with_spinner(Phase::Searching, || discover_device(device))?;
+    let discovery = discovery()?;
+    let found = with_spinner(Phase::Searching, || discover_device(&discovery, device))?;
     cache_endpoint(
         config_path,
         &device.name,
@@ -295,6 +322,42 @@ fn connect(device: &Device, config_path: &Path) -> Result<Client, AppError> {
     // to the socket without its scope id.
     let addr = socket_addr(found.address, found.port, found.interface.as_deref())?;
     with_spinner(Phase::Connecting, || try_connect(addr, found.public_wire, token)).map_err(Into::into)
+}
+
+/// Resolve `cached` into a socket address and attempt the handshake against
+/// it, folding both ways a cached endpoint can turn out to be stale into
+/// the same discovery-fallback decision: the address doesn't even build
+/// (an interface name that no longer resolves -- `cached_socket_addr`
+/// returning anything other than the one deliberately-hard `Usage` error
+/// below), or it builds but nothing ever answers (`evaluate_cached_attempt`
+/// on the handshake attempt itself).
+fn try_cached_endpoint(
+    cached: &Cached,
+    device_name: &str,
+    public_wire: [u8; 32],
+    token: [u8; 16],
+) -> CachedAttempt {
+    let addr = match cached_socket_addr(cached, device_name) {
+        Ok(addr) => addr,
+        // Only one case is a genuinely actionable config problem: a
+        // link-local address was cached with no interface ever recorded
+        // for it at all (`cached_socket_addr`'s own `Usage` message names
+        // the fix). Everything else `cached_socket_addr` can return is an
+        // `Io` failure resolving the recorded interface *name* to the
+        // OS's current index for it -- exactly what happens when the NIC
+        // behind that name is replugged, renamed, or removed, which is
+        // precisely the situation storing a name instead of an index
+        // exists to survive. Treating that as a permanent, unrecoverable
+        // error (as it used to be, surfacing as exit 1 "internal error"
+        // forever) would defeat the whole design; falling back to
+        // discovery, same as a plain timeout, lets a single fresh mDNS
+        // scan repair the cache instead.
+        Err(err @ AppError::Usage(_)) => return CachedAttempt::Failed(err),
+        Err(_) => return CachedAttempt::StaleFallBackToDiscovery,
+    };
+
+    let attempt = with_spinner(Phase::Connecting, || try_connect(addr, public_wire, token));
+    evaluate_cached_attempt(attempt)
 }
 
 /// Build the socket address for a cached endpoint. A link-local IPv6
@@ -319,9 +382,11 @@ fn cached_socket_addr(cached: &Cached, device_name: &str) -> Result<SocketAddr, 
 /// handshake -- can be unit tested without a real socket or session.
 enum CachedAttempt {
     Connected(Client),
-    /// The cached address didn't answer at all: far more likely a stale
-    /// DHCP lease than a device that stopped existing, so it's worth a
-    /// fresh mDNS lookup.
+    /// The cached endpoint didn't pan out: either it didn't answer at all,
+    /// or it couldn't even be turned into a socket address (a cached
+    /// interface name that no longer resolves). Both are far more likely a
+    /// stale DHCP lease or a replugged/renamed NIC than a device that
+    /// stopped existing, so both are worth a fresh mDNS lookup.
     StaleFallBackToDiscovery,
     /// Anything else, most importantly `HandshakeRejected`: a wrong token
     /// is not a stale address, and retrying via discovery would silently
@@ -332,7 +397,12 @@ enum CachedAttempt {
 fn evaluate_cached_attempt(result: Result<Client, syncleo::Error>) -> CachedAttempt {
     match result {
         Ok(client) => CachedAttempt::Connected(client),
-        Err(syncleo::Error::Timeout) => CachedAttempt::StaleFallBackToDiscovery,
+        // A plain timeout (nothing answered) and an I/O failure (the route
+        // is gone, the interface is down, the peer refused the connection)
+        // are both what a stale cached endpoint looks like from here --
+        // neither means the device itself rejected anything, so both are
+        // worth a fresh discovery scan rather than a permanent failure.
+        Err(syncleo::Error::Timeout) | Err(syncleo::Error::Io(_)) => CachedAttempt::StaleFallBackToDiscovery,
         Err(other) => CachedAttempt::Failed(other.into()),
     }
 }
@@ -350,9 +420,9 @@ fn try_connect(
     Client::connect(Box::new(transport), our_private, public_wire, token, CONNECT_TIMEOUT)
 }
 
-/// Locate `device` on the network by its MAC address over mDNS.
-fn discover_device(device: &Device) -> Result<Found, AppError> {
-    let discovery = MdnsDiscovery::new()?;
+/// Locate `device` on the network by its MAC address, via whichever
+/// [`Discovery`] `connect_with` was given.
+fn discover_device(discovery: &impl Discovery, device: &Device) -> Result<Found, AppError> {
     discovery
         .find(&device.mac, DISCOVERY_TIMEOUT)?
         .ok_or_else(|| AppError::NotFound(not_found_message(&device.name, &device.mac)))
@@ -550,6 +620,122 @@ mod tests {
         }
     }
 
+    #[test]
+    fn an_io_failure_on_the_cached_endpoint_falls_back_to_discovery() {
+        // Finding 3: an interface that no longer resolves (ENODEV, the NIC
+        // was renamed/replugged/removed) or a route that's gone
+        // (ENETUNREACH) surfaces as Error::Io from `try_connect`. This used
+        // to be treated as `Failed` -- a permanent exit-1 "internal error"
+        // with no fallback, even though this is exactly the "stale cached
+        // endpoint" case discovery exists to repair.
+        assert!(matches!(
+            evaluate_cached_attempt(Err(syncleo::Error::Io(std::io::Error::other("no such device")))),
+            CachedAttempt::StaleFallBackToDiscovery
+        ));
+    }
+
+    struct FakeDiscovery(Option<Found>);
+
+    impl Discovery for FakeDiscovery {
+        fn find_all(&self, _timeout: Duration) -> Result<Vec<Found>, syncleo::Error> {
+            Ok(self.0.clone().into_iter().collect())
+        }
+        fn find(&self, mac: &str, _timeout: Duration) -> Result<Option<Found>, syncleo::Error> {
+            Ok(self.0.clone().filter(|f| f.mac == mac))
+        }
+    }
+
+    #[test]
+    fn a_cached_endpoint_with_a_stale_interface_falls_back_to_discovery_and_reconnects() {
+        // The structural gap the analysis called out: `discover_device`
+        // used to construct `MdnsDiscovery::new()` inline, so the whole
+        // cached-fails -> discover -> re-cache -> connect path had no test
+        // coverage without a real multicast socket. `connect_with`'s
+        // injected `Discovery` factory closes that gap. This drives the
+        // exact scenario A from finding 3: a cached link-local address
+        // whose recorded interface name no longer resolves must fall back
+        // to discovery (here: a fake one, pointing at a real simulator on
+        // loopback) rather than dying as a permanent internal error.
+        const TOKEN: [u8; 16] = [
+            0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
+        ];
+        let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+
+        let dir = std::env::temp_dir()
+            .join(format!("d3home-test-stale-interface-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\n\
+                 token = \"{}\"\n\n[devices.cached]\naddress = \"fe80::dead:beef:dead:beef\"\n\
+                 port = 8888\npublic_key = \"{}\"\ninterface = \"d3home-no-such-iface\"\n",
+                hex_encode(&TOKEN),
+                "ab".repeat(32),
+            ),
+        )
+        .unwrap();
+
+        let config = Config::load(&path).unwrap();
+        let device = config.resolve("kettle").unwrap();
+
+        let found = Found {
+            mac: "aabbccddeeff".into(),
+            address: handle.addr.ip(),
+            interface: None,
+            port: handle.addr.port(),
+            public_wire: handle.public_wire,
+            curve: 29,
+            protocol: 2,
+        };
+
+        let client = connect_with(device, &path, || Ok::<_, syncleo::Error>(FakeDiscovery(Some(found))));
+        assert!(client.is_ok(), "must fall back to the injected discovery and connect: {:?}", client.err());
+
+        let reloaded = Config::load(&path).unwrap();
+        let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("must re-cache on success");
+        assert_eq!(cached.address, handle.addr.ip());
+        assert_eq!(cached.port, handle.addr.port());
+        assert_eq!(cached.interface, None, "the freshly discovered endpoint needs no interface");
+
+        handle.shutdown();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_cached_endpoint_with_a_stale_interface_and_nothing_discoverable_is_not_found() {
+        // The other half of the same gap: when discovery *also* comes up
+        // empty, the final error must be the ordinary "not found" a caller
+        // already knows how to wait through in `watch` -- not the stale
+        // Internal/exit-1 error the cached endpoint alone used to produce.
+        const TOKEN: [u8; 16] = [0xb0; 16];
+        let dir = std::env::temp_dir()
+            .join(format!("d3home-test-stale-interface-no-discovery-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\n\
+                 token = \"{}\"\n\n[devices.cached]\naddress = \"fe80::dead:beef:dead:beef\"\n\
+                 port = 8888\npublic_key = \"{}\"\ninterface = \"d3home-no-such-iface\"\n",
+                hex_encode(&TOKEN),
+                "ab".repeat(32),
+            ),
+        )
+        .unwrap();
+
+        let config = Config::load(&path).unwrap();
+        let device = config.resolve("kettle").unwrap();
+
+        let err = connect_with(device, &path, || Ok::<FakeDiscovery, syncleo::Error>(FakeDiscovery(None)))
+            .expect_err("nothing was ever discoverable");
+        assert_eq!(err.exit_code(), crate::cli::ExitCode::NotFound);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     fn sample_kettle_toml(token: &str) -> String {
         format!(
             "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"{token}\"\n"
@@ -646,6 +832,32 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("kettle"), "error should name the device: {message}");
         assert!(message.contains("interface"), "error should point at the fix: {message}");
+    }
+
+    #[test]
+    fn a_cached_link_local_address_with_an_unresolvable_interface_is_not_a_hard_usage_error() {
+        // Finding 3: this is *not* the "never had an interface at all"
+        // case above (a genuine config problem `cached_socket_addr`
+        // deliberately reports loudly). An interface name that used to
+        // resolve but no longer does (the NIC was renamed, replugged, or
+        // removed) is exactly what the interface-*name* cache design
+        // exists to survive: `try_cached_endpoint` must recognize this as
+        // something other than `AppError::Usage` so it falls back to
+        // discovery instead of failing outright.
+        let cached = Cached {
+            address: "fe80::dead:beef:dead:beef".parse().unwrap(),
+            port: 8888,
+            public_key: "ab".repeat(32),
+            interface: Some("d3home-no-such-iface".into()),
+        };
+
+        let err = cached_socket_addr(&cached, "kettle").unwrap_err();
+        assert_ne!(
+            err.exit_code(),
+            crate::cli::ExitCode::Usage,
+            "an unresolvable interface must not be reported as the same hard failure as no \
+             interface at all: {err}"
+        );
     }
 
     #[test]

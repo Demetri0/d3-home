@@ -192,7 +192,33 @@ impl From<syncleo::Error> for AppError {
             // -- distinct from every Timeout/Silence/NoState case above,
             // where the most it says is silence.
             syncleo::Error::DeviceNak => AppError::Device(message),
-            syncleo::Error::Codec(_) | syncleo::Error::Io(_) => AppError::Internal(message),
+            // A failure below the protocol layer -- a socket call failing
+            // (ENETUNREACH, EHOSTUNREACH), a cached interface name that no
+            // longer resolves to an index (ENODEV: the NIC was replugged,
+            // renamed, or removed), the mDNS daemon failing to start -- is,
+            // from the operator's chair, indistinguishable from the device
+            // simply not answering: both say "the network's not reaching it
+            // right now, maybe try again or run discover," neither says
+            // "this is a bug in d3home." Grouping it with Timeout (rather
+            // than Codec below) rather than `Internal` also means
+            // `commands::kettle::is_connectivity_failure` retries it in
+            // `watch`'s reconnect loop, and `commands::kettle::connect`
+            // falls back from a cached endpoint to a fresh discovery scan
+            // on it exactly as it does for a plain timeout -- see
+            // `evaluate_cached_attempt`. Before this, a renamed/removed
+            // network interface made every command exit 1 "internal error"
+            // forever, with no fallback, even though the interface-*name*
+            // cache design exists precisely to survive this.
+            syncleo::Error::Io(_) => AppError::Timeout(message),
+            // A malformed frame from the device never actually reaches
+            // here: `Session::on_packet` swallows a `CodecError`
+            // internally (garbage on the wire is silently dropped, not
+            // surfaced as an `Err`). This stays `Internal` as the honest
+            // "should not happen" bucket, distinct from the `Io` case
+            // above -- if it is ever reachable, it means a corrupted
+            // frame got past decryption, not a network hiccup, and
+            // retrying the identical bytes would not help.
+            syncleo::Error::Codec(_) => AppError::Internal(message),
             syncleo::Error::UnsupportedProtocol { .. }
             | syncleo::Error::NoUsableAddress
             | syncleo::Error::BadServiceRecord(_) => AppError::NotFound(message),
@@ -279,5 +305,26 @@ mod tests {
             AppError::from(syncleo::Error::LinkLocalAddressWithoutScope).exit_code(),
             ExitCode::Usage
         );
+    }
+
+    #[test]
+    fn an_io_failure_is_a_timeout_not_an_internal_error() {
+        // Finding 3: a stale cached interface (renamed/replugged NIC) or an
+        // unreachable network surfaces as `syncleo::Error::Io`. Before this,
+        // that mapped to `Internal` -- exit 1, "a bug in this program" --
+        // with no way for `watch`'s reconnect loop to tell it apart from a
+        // real bug. It belongs with `Timeout`: both mean "couldn't reach
+        // the device right now," and both are worth retrying.
+        let err = AppError::from(syncleo::Error::Io(std::io::Error::other("no such device")));
+        assert_eq!(err.exit_code(), ExitCode::Timeout);
+    }
+
+    #[test]
+    fn a_codec_failure_stays_an_internal_error() {
+        // Distinct from the Io case above: a `CodecError` reaching this far
+        // would mean corrupted bytes got past decryption, not a network
+        // hiccup, so retrying the identical bytes would not help.
+        let err = AppError::from(syncleo::Error::Codec(syncleo::error::CodecError::EmptyBody));
+        assert_eq!(err.exit_code(), ExitCode::Internal);
     }
 }
