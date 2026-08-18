@@ -336,13 +336,32 @@ fn handle_handshake(
 /// Report full current state, unprompted, right after the handshake. This
 /// is how a client ever learns anything at all: the protocol has no "query
 /// state" command, only asynchronous reports from the device.
+///
+/// The last two reports (hardware, diagnostic) mirror what the real kettle
+/// sends unprompted in the same burst: a fixed `1.1.4` hardware version (the
+/// exact value confirmed against the real device's vendor app) and a
+/// diagnostic blob shaped like the real one -- a 20-byte header followed by
+/// four 4-byte ASCII tag / 4-byte little-endian value pairs, 52 bytes total
+/// (see the design spec's code-145 row). Both are fixed, not part of
+/// `SimulatedState`: nothing in this project reads or acts on either, so
+/// there is nothing for a test to configure.
 fn report_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, shared: &Shared) {
     let snapshot = *shared.state.lock().expect("state lock poisoned");
-    let reports: [(u8, Vec<u8>); 4] = [
+
+    let mut diagnostic = vec![ty::DIAGNOSTIC];
+    diagnostic.extend_from_slice(&[0u8; 20]); // header: contents unknown, only the length is
+    for (tag, value) in [(*b"udps", 1u32), (*b"IDLE", 2u32), (*b"Tmr\0", 3u32), (*b"rtT\0", 4u32)] {
+        diagnostic.extend_from_slice(&tag);
+        diagnostic.extend_from_slice(&value.to_le_bytes());
+    }
+
+    let reports: [(u8, Vec<u8>); 6] = [
         (1, vec![ty::MODE, snapshot.mode.as_u8()]),
         (2, vec![ty::TARGET_TEMPERATURE, snapshot.target, 0]),
         (3, vec![ty::CURRENT_TEMPERATURE, snapshot.current, 0]),
         (4, vec![ty::VOLUME, snapshot.volume]),
+        (5, vec![ty::HARDWARE, 1, 1, 4]),
+        (6, diagnostic),
     ];
     for (seq, body) in reports {
         let frame = encrypt_frame(keys, seq, FrameType::Cmd, &body).to_bytes();
