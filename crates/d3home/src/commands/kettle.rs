@@ -28,11 +28,20 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long `discover` (used when a device has no cached endpoint) waits
 /// for a reply before giving up.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long `status` listens for the device's state reports. The protocol
-/// has no "query state" command; the device reports its full state,
-/// unprompted, right after the handshake, so this only needs to be long
-/// enough to catch that burst.
-const STATUS_WINDOW: Duration = Duration::from_millis(500);
+/// How long `status` waits, after the last state event it saw, before
+/// deciding the device's post-handshake burst is over. The burst is many
+/// small messages sent close together, so a gap this long means it has
+/// finished, not merely paused.
+const STATUS_QUIET_WINDOW: Duration = Duration::from_millis(300);
+/// The overall cap on how long `status` waits for the first state event to
+/// arrive at all. The protocol has no "query state" command; the device
+/// reports its full state, unprompted, right after the handshake, but on
+/// the real hardware that burst has been observed to start late -- this
+/// needs to be generous enough to still catch it rather than reporting
+/// [`syncleo::Error::NoState`] on a device that simply hadn't gotten to it
+/// yet. Comparable to `DISCOVERY_TIMEOUT` below: both cover "the device is
+/// slow," not "the device is gone."
+const STATUS_OVERALL_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Run one kettle action. `action` is whatever followed the device name on
 /// the command line, unexamined until now. `config_path` is threaded down
@@ -56,7 +65,7 @@ pub fn run(device: &Device, action: &[String], json: bool, config_path: &Path) -
 
 fn status(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
     let mut client = connect(device, config_path)?;
-    let state = client.collect_state(STATUS_WINDOW)?;
+    let state = client.collect_state(STATUS_QUIET_WINDOW, STATUS_OVERALL_DEADLINE)?;
     output::print_state(&state, json);
 
     // The device has its own notion of an error condition (no water,

@@ -139,24 +139,47 @@ impl Client {
         }
     }
 
-    /// Collect whatever state events arrive within `window` into a
-    /// [`DeviceState`]. The protocol has no "query state" command; the
-    /// device reports state on its own, so this just listens.
+    /// Collect whatever state events arrive into a [`DeviceState`], waiting
+    /// adaptively rather than for a single fixed window. The protocol has
+    /// no "query state" command; the device reports its full state,
+    /// unprompted, as a burst of many small events right after the
+    /// handshake, so this has two separate jobs: return promptly once that
+    /// burst has clearly finished, but not give up too early on a device
+    /// that is simply slow to start it.
+    ///
+    /// `quiet` and `overall` give the two bounds:
+    /// - Once at least one event has arrived, this returns as soon as
+    ///   `quiet` elapses with no further event -- the burst is many
+    ///   messages sent close together, so a gap this long means it is
+    ///   done, not merely paused.
+    /// - Until the first event arrives, `quiet` does not apply at all;
+    ///   this keeps waiting up to `overall`, measured from the start of
+    ///   the call, to cover a device that starts its burst late.
     ///
     /// A `DeviceState` with every field still `None` is reported as
     /// [`Error::NoState`] rather than a hollow success: the post-handshake
     /// state burst is this project's own assumption about what a Syncleo
     /// device does, not a documented part of the protocol. If a real
-    /// device doesn't send one, or it lands after `window` closes, this is
-    /// the caller's only way to tell "genuinely learned nothing" apart
+    /// device doesn't send one, or it lands after `overall` closes, this
+    /// is the caller's only way to tell "genuinely learned nothing" apart
     /// from "the device really has no water, isn't erroring, and so on" --
     /// both would otherwise print identically as six `unknown` lines with
     /// exit code 0, and a script would have no way to distinguish them. Any
     /// field actually set still counts as a real (if partial) success.
-    pub fn collect_state(&mut self, window: Duration) -> Result<DeviceState, Error> {
+    pub fn collect_state(&mut self, quiet: Duration, overall: Duration) -> Result<DeviceState, Error> {
         let mut state = DeviceState::default();
-        let deadline = Instant::now() + window;
+        let overall_deadline = Instant::now() + overall;
+        // Set once the first event of any kind arrives; from then on it is
+        // pushed forward on every further event, and closing in on it (as
+        // opposed to `overall_deadline`) is what lets the common case
+        // return early instead of waiting out the full window.
+        let mut quiet_deadline: Option<Instant> = None;
+
         loop {
+            let deadline = match quiet_deadline {
+                Some(quiet_deadline) => quiet_deadline.min(overall_deadline),
+                None => overall_deadline,
+            };
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 if state == DeviceState::default() {
@@ -164,13 +187,26 @@ impl Client {
                 }
                 return Ok(state);
             }
+
             let actions = self.pump(remaining)?;
+            let mut heard_something = false;
             for action in actions {
                 match action {
-                    Action::Emit(event) => state.apply(event),
+                    Action::Emit(event) => {
+                        state.apply(event);
+                        heard_something = true;
+                    }
                     Action::Lost(reason) => return Err(lost_to_error(reason)),
                     _ => {}
                 }
+            }
+            // Any event counts, even one that carries no field this
+            // client tracks (diagnostics, hardware info, unknown types):
+            // the real device's burst interleaves those with the events
+            // that do, and a quiet window that only reset on recognized
+            // fields could close mid-burst.
+            if heard_something {
+                quiet_deadline = Some(Instant::now() + quiet);
             }
         }
     }

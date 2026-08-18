@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use syncleo::client::Client;
 use syncleo::codec::command::{Command, PowerMode};
 use syncleo::simulator::KettleSimulator;
@@ -38,7 +38,54 @@ fn reads_state_back_from_the_device() {
     let handle = KettleSimulator::spawn(TOKEN).unwrap();
     let mut client = connect(&handle, TOKEN).unwrap();
 
-    let state = client.collect_state(Duration::from_millis(500)).unwrap();
+    let state = client
+        .collect_state(Duration::from_millis(150), Duration::from_secs(2))
+        .unwrap();
+
+    assert!(state.current_temperature.is_some(), "device reports its temperature");
+    assert!(state.water_present.is_some(), "device reports whether it holds water");
+
+    handle.shutdown();
+}
+
+#[test]
+fn a_device_that_answers_promptly_returns_well_before_the_overall_deadline() {
+    // The whole point of the adaptive window: the common case (a device
+    // that sends its burst right away) should finish once the burst goes
+    // quiet, not wait out the full, generous overall deadline. A
+    // regression to "always wait the maximum" would still pass every other
+    // test in this file but would show up here as elapsed time creeping up
+    // toward the deadline.
+    let handle = KettleSimulator::spawn(TOKEN).unwrap();
+    let mut client = connect(&handle, TOKEN).unwrap();
+
+    let overall = Duration::from_secs(5);
+    let start = Instant::now();
+    let state = client.collect_state(Duration::from_millis(150), overall).unwrap();
+    let elapsed = start.elapsed();
+
+    assert!(state.current_temperature.is_some());
+    assert!(
+        elapsed < overall / 4,
+        "a prompt device took {elapsed:?}, expected well under the {overall:?} overall deadline"
+    );
+
+    handle.shutdown();
+}
+
+#[test]
+fn a_device_that_starts_its_burst_late_still_produces_a_successful_read() {
+    // Observed against the real kettle: the state burst sometimes starts
+    // well after the handshake completes. A fixed ~500ms window (the old
+    // behaviour) would close before any of it arrived; the overall
+    // deadline here must be generous enough to still catch it.
+    let handle = KettleSimulator::spawn(TOKEN).unwrap();
+    handle.delay_state_burst(Duration::from_millis(700));
+    let mut client = connect(&handle, TOKEN).unwrap();
+
+    let state = client
+        .collect_state(Duration::from_millis(150), Duration::from_secs(2))
+        .expect("a generous overall deadline must still catch a late burst");
 
     assert!(state.current_temperature.is_some(), "device reports its temperature");
     assert!(state.water_present.is_some(), "device reports whether it holds water");
@@ -58,9 +105,11 @@ fn the_devices_own_acks_are_decrypted_and_validated_by_the_simulator() {
     let mut client = connect(&handle, TOKEN).expect("handshake succeeds");
 
     // The handshake response and the four state-burst reports are each a
-    // Cmd frame the client must ack; collect_state's window is long enough
-    // for all of them to round-trip.
-    client.collect_state(Duration::from_millis(500)).unwrap();
+    // Cmd frame the client must ack; collect_state's overall deadline is
+    // long enough for all of them to round-trip.
+    client
+        .collect_state(Duration::from_millis(150), Duration::from_secs(2))
+        .unwrap();
 
     assert!(
         handle.valid_acks() >= 1,
@@ -81,8 +130,19 @@ fn a_device_that_sends_no_state_at_all_is_reported_as_an_error_not_a_hollow_succ
     let handle = KettleSimulator::spawn_silent(TOKEN).unwrap();
     let mut client = connect(&handle, TOKEN).expect("handshake succeeds even with no state burst");
 
-    let err = client.collect_state(Duration::from_millis(200)).expect_err("no events arrived at all");
+    // A short overall deadline: nothing ever arrives, so this is entirely
+    // governed by the overall bound, not the quiet one, and must not hang
+    // the suite.
+    let overall = Duration::from_millis(200);
+    let start = Instant::now();
+    let err = client
+        .collect_state(Duration::from_millis(50), overall)
+        .expect_err("no events arrived at all");
     assert!(matches!(err, syncleo::Error::NoState), "got {err:?}");
+    assert!(
+        start.elapsed() < overall * 2,
+        "must give up at the overall deadline, not hang"
+    );
 
     handle.shutdown();
 }
