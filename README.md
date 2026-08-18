@@ -52,7 +52,7 @@ public_key = "..."
 Из приложения Polaris IQ Home: поделиться устройством, получить ссылку вида
 
 ```
-https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=deadbeefdeadbeefdeadbeefdeadbeef
+https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=0123456789abcdef0123456789abcdef
 ```
 
 `aabbccddeeff` — это `mac`, значение `token` — это `token`. Регистр и
