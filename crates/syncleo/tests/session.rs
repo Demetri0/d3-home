@@ -202,6 +202,37 @@ fn treats_a_rejected_handshake_as_a_bad_token() {
 }
 
 #[test]
+fn a_pre_connection_ack_does_not_cancel_the_handshakes_own_resend() {
+    // The spec allows the device to answer the handshake with an Ack
+    // before its handshake response, in either order. If that Ack cleared
+    // the pending handshake frame (as it used to), a handshake response
+    // lost after it would leave nothing pending to resend, and the
+    // session would sit idle rather than retry every second the way it
+    // does for every other pending frame.
+    let (mut session, initial) = start();
+    let handshake_bytes = sent(&initial)[0].clone();
+    let seq = Frame::parse(&handshake_bytes).unwrap().head.seq;
+
+    let ack_actions = session.step(Input::Packet(from_device(seq, FrameType::Ack, &[])), Millis(10));
+    assert!(
+        !ack_actions.iter().any(|a| matches!(a, Action::Acked(_))),
+        "a pre-connection ack must not surface as Acked, got {ack_actions:?}"
+    );
+    assert!(!session.is_connected());
+
+    // Past the 1s resend interval with no handshake response ever
+    // arriving, the handshake frame must still be resent -- proving it
+    // is still tracked as pending, not silently dropped by the Ack above.
+    let resend_actions = session.step(Input::Tick, Millis(1_010));
+    assert_eq!(
+        sent(&resend_actions),
+        vec![handshake_bytes],
+        "the handshake must still resend after a pre-connection ack"
+    );
+    assert!(!session.is_connected());
+}
+
+#[test]
 fn ignores_a_packet_it_cannot_decrypt() {
     let (mut session, _) = start();
 

@@ -204,7 +204,27 @@ impl Session {
                 }
             }
             FrameType::Ack => {
-                if let Some(pending) = &self.pending
+                // Only a *post-handshake* Ack retires the pending frame.
+                // The spec allows the device to answer the handshake with
+                // an Ack before its handshake response, in either order
+                // ("Устройство может сначала прислать ACK, а может сразу
+                // ответ -- обе последовательности допустимы"). Before this
+                // guard, that pre-connection Ack cleared `pending` --
+                // which, before the handshake completes, *is* the
+                // handshake frame's own resend slot -- so if the
+                // handshake response that followed was then lost, nothing
+                // was left pending to resend: the session sat idle until
+                // the caller's own, much coarser connect timeout gave up,
+                // even though the resend logic exists precisely to
+                // survive one dropped packet like this. `last_incoming`
+                // above is still updated unconditionally, so the 15s
+                // silence timer stays honest either way; this only stops
+                // a premature Ack from disarming the handshake retry.
+                // Nothing reads `Action::Acked` before the session is
+                // connected (`Client::connect` only watches for
+                // `Connected`/`Lost`), so skipping it here costs nothing.
+                if self.connected
+                    && let Some(pending) = &self.pending
                     && pending.seq == frame.head.seq
                 {
                     self.pending = None;
