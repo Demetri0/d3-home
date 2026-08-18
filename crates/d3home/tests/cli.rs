@@ -211,7 +211,7 @@ fn a_temperature_outside_the_supported_range_is_a_usage_error() {
         .args(["--config", config.to_str().unwrap(), "kettle", "start", "250"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("35"));
+        .stderr(predicate::str::contains("30"));
 
     handle.shutdown();
 }

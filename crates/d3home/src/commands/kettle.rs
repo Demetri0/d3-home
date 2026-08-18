@@ -18,9 +18,15 @@ use crate::cli::AppError;
 use crate::config::{Cached, Config, ConfigError, Device, hex_encode};
 use crate::output;
 
-/// Provisional: Task 12 checks these against the real kettle and corrects
-/// them if the hardware disagrees.
-pub const MIN_TEMPERATURE: u8 = 35;
+/// Confirmed against the vendor app, which offers 30-100 in steps of 5.
+/// The step is deliberately *not* enforced here: the wire format carries a
+/// raw byte, and there is no evidence the device itself rejects an
+/// intermediate value -- only that the app never offers one. If the device
+/// does reject one, `Client::send` now surfaces that as
+/// `syncleo::Error::DeviceNak` (exit code 6), which is an honest answer
+/// grounded in what the hardware actually said, rather than a client-side
+/// guess about a step the protocol may not enforce at all.
+pub const MIN_TEMPERATURE: u8 = 30;
 pub const MAX_TEMPERATURE: u8 = 100;
 
 /// How long `connect` waits for the handshake to complete.
@@ -319,17 +325,25 @@ mod tests {
     #[test]
     fn start_with_a_temperature_in_range_is_accepted() {
         assert_eq!(parse_target_temperature(&["80".to_string()]).unwrap(), Some(80));
-        assert_eq!(parse_target_temperature(&["35".to_string()]).unwrap(), Some(35));
+        assert_eq!(parse_target_temperature(&["30".to_string()]).unwrap(), Some(30));
         assert_eq!(parse_target_temperature(&["100".to_string()]).unwrap(), Some(100));
+    }
+
+    #[test]
+    fn a_temperature_not_a_multiple_of_five_is_still_accepted() {
+        // The vendor app only *offers* multiples of five; nothing says the
+        // device itself enforces that step. Rejecting 83 client-side would
+        // be a guess this project has no evidence for.
+        assert_eq!(parse_target_temperature(&["83".to_string()]).unwrap(), Some(83));
     }
 
     #[test]
     fn a_temperature_outside_the_range_is_a_usage_error() {
         let err = parse_target_temperature(&["250".to_string()]).unwrap_err();
         assert_eq!(err.exit_code(), crate::cli::ExitCode::Usage);
-        assert!(err.to_string().contains("35"));
+        assert!(err.to_string().contains("30"));
 
-        assert!(parse_target_temperature(&["34".to_string()]).is_err());
+        assert!(parse_target_temperature(&["29".to_string()]).is_err());
         assert!(parse_target_temperature(&["101".to_string()]).is_err());
     }
 
