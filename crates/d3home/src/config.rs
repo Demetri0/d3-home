@@ -64,7 +64,12 @@ pub enum ConfigError {
     /// quotes the offending source line verbatim, and the offending line
     /// can be a malformed `token = "..."`; echoing that would print a
     /// device secret to whatever reads this error (a terminal, a log, shell
-    /// history). See `parse_error` below, the only place this is built.
+    /// history). `parse_error` below is the only place this is built from a
+    /// live `toml::de::Error` encountered while loading a real config; it
+    /// is also built directly from a `toml::ser::Error`'s `Display` in
+    /// [`Config::save`] (serialisation failures do not echo source text,
+    /// so that is not a leak path) and, in `#[cfg(test)]` helpers only,
+    /// from `toml::de::Error`'s own `Display` for brevity.
     #[error("cannot parse the config file: {0}")]
     Parse(String),
 
