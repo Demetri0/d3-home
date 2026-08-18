@@ -11,7 +11,7 @@ use syncleo::client::DeviceState;
 use syncleo::codec::command::{Event, PowerMode};
 use syncleo::discovery::Found;
 
-use crate::config::Config;
+use crate::config::{Config, hex_encode};
 
 fn mode_str(mode: PowerMode) -> &'static str {
     match mode {
@@ -148,19 +148,65 @@ pub fn print_devices(config: &Config, json: bool) {
     }
 }
 
-/// Report what `discover` found on the network.
+/// Report what `discover` found on the network, including each device's
+/// public key: the design's hand-write escape hatch for a config's
+/// `[devices.cached]` section (used when mDNS can't reach the device, e.g.
+/// a blocked firewall) needs `address`, `port` *and* `public_key`, and this
+/// is the only place the public key is ever surfaced to the operator.
 pub fn print_found(found: &[Found], json: bool) {
     if json {
-        let list: Vec<_> = found
-            .iter()
-            .map(|f| json!({"mac": f.mac, "address": f.address.to_string(), "port": f.port}))
-            .collect();
+        let list: Vec<_> = found.iter().map(found_json).collect();
         println!("{}", serde_json::Value::Array(list));
     } else if found.is_empty() {
         println!("no devices found");
     } else {
         for f in found {
-            println!("{} at {}:{}", f.mac, f.address, f.port);
+            println!("{}", found_human(f));
         }
+    }
+}
+
+fn found_json(f: &Found) -> serde_json::Value {
+    json!({
+        "mac": f.mac,
+        "address": f.address.to_string(),
+        "port": f.port,
+        "public_key": hex_encode(&f.public_wire),
+    })
+}
+
+fn found_human(f: &Found) -> String {
+    format!("{} at {}:{} (public key: {})", f.mac, f.address, f.port, hex_encode(&f.public_wire))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    fn sample_found() -> Found {
+        Found {
+            mac: "aabbccddeeff".into(),
+            address: Ipv4Addr::new(192, 168, 1, 42).into(),
+            port: 8888,
+            public_wire: [0xAB; 32],
+            curve: 29,
+            protocol: 2,
+        }
+    }
+
+    #[test]
+    fn discover_prints_the_public_key_in_human_output() {
+        // Without this, an operator whose mDNS is blocked has no way to
+        // hand-fill `[devices.cached]`'s `public_key` field, and the cache
+        // escape hatch the design describes is unwalkable.
+        let line = found_human(&sample_found());
+        assert!(line.contains(&hex_encode(&[0xAB; 32])), "public key missing from: {line}");
+    }
+
+    #[test]
+    fn discover_prints_the_public_key_in_json_output() {
+        let value = found_json(&sample_found());
+        assert_eq!(value["public_key"], hex_encode(&[0xAB; 32]));
     }
 }

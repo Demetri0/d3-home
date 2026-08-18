@@ -4,17 +4,18 @@
 //! `main::dispatch` a new device type -- the action words are only ever
 //! interpreted here, by the driver that owns them.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::ops::ControlFlow;
+use std::path::Path;
 use std::time::Duration;
 
 use syncleo::client::Client;
 use syncleo::codec::command::{Command, PowerMode};
-use syncleo::discovery::{Discovery, MdnsDiscovery};
+use syncleo::discovery::{Discovery, Found, MdnsDiscovery};
 use syncleo::transport::UdpTransport;
 
 use crate::cli::AppError;
-use crate::config::Device;
+use crate::config::{Cached, Config, ConfigError, Device, hex_encode};
 use crate::output;
 
 /// Provisional: Task 12 checks these against the real kettle and corrects
@@ -34,25 +35,27 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const STATUS_WINDOW: Duration = Duration::from_millis(500);
 
 /// Run one kettle action. `action` is whatever followed the device name on
-/// the command line, unexamined until now.
-pub fn run(device: &Device, action: &[String], json: bool) -> Result<(), AppError> {
+/// the command line, unexamined until now. `config_path` is threaded down
+/// to `connect` so a freshly discovered endpoint can be cached back into
+/// the registry.
+pub fn run(device: &Device, action: &[String], json: bool, config_path: &Path) -> Result<(), AppError> {
     let (verb, rest) = action
         .split_first()
         .ok_or_else(|| AppError::Usage("missing action; try status, start, off, or watch".into()))?;
 
     match verb.as_str() {
-        "status" => status(device, json),
-        "start" => start(device, rest),
-        "off" => off(device),
-        "watch" => watch(device, json),
+        "status" => status(device, json, config_path),
+        "start" => start(device, rest, config_path),
+        "off" => off(device, config_path),
+        "watch" => watch(device, json, config_path),
         other => Err(AppError::Usage(format!(
             "unknown kettle action '{other}'; try status, start, off, or watch"
         ))),
     }
 }
 
-fn status(device: &Device, json: bool) -> Result<(), AppError> {
-    let mut client = connect(device)?;
+fn status(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
+    let mut client = connect(device, config_path)?;
     let state = client.collect_state(STATUS_WINDOW)?;
     output::print_state(&state, json);
 
@@ -67,12 +70,12 @@ fn status(device: &Device, json: bool) -> Result<(), AppError> {
     Ok(())
 }
 
-fn start(device: &Device, args: &[String]) -> Result<(), AppError> {
+fn start(device: &Device, args: &[String], config_path: &Path) -> Result<(), AppError> {
     // Validated before connecting: a bad temperature should fail instantly,
     // not after a network round trip that was always going to be wasted.
     let target = parse_target_temperature(args)?;
 
-    let mut client = connect(device)?;
+    let mut client = connect(device, config_path)?;
     match target {
         None => client.send(Command::Mode(PowerMode::On))?,
         Some(temperature) => {
@@ -86,8 +89,8 @@ fn start(device: &Device, args: &[String]) -> Result<(), AppError> {
     Ok(())
 }
 
-fn off(device: &Device) -> Result<(), AppError> {
-    let mut client = connect(device)?;
+fn off(device: &Device, config_path: &Path) -> Result<(), AppError> {
+    let mut client = connect(device, config_path)?;
     client.send(Command::Mode(PowerMode::Off))?;
     Ok(())
 }
@@ -97,8 +100,8 @@ fn off(device: &Device) -> Result<(), AppError> {
 /// arrives -- no buffering -- so this stays a genuine stream: a future
 /// caller (a notifier, a TUI) can swap in a different callback without
 /// this function changing shape.
-fn watch(device: &Device, json: bool) -> Result<(), AppError> {
-    let mut client = connect(device)?;
+fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
+    let mut client = connect(device, config_path)?;
     client.watch(|event| {
         output::print_event(&event, json);
         ControlFlow::Continue(())
@@ -127,38 +130,122 @@ fn parse_target_temperature(args: &[String]) -> Result<Option<u8>, AppError> {
     }
 }
 
-/// Perform the handshake with `device`: the cached endpoint if the config
-/// has one, otherwise a fresh mDNS lookup by MAC.
-fn connect(device: &Device) -> Result<Client, AppError> {
+/// Perform the handshake with `device`.
+///
+/// If the config has a cached endpoint, try it first. A cached endpoint
+/// that rejects the handshake (`HandshakeRejected`) is left alone --  a
+/// wrong token is not a stale address, and falling back would silently
+/// mask a real problem behind a slow, confusing retry. A cached endpoint
+/// that simply doesn't answer (`Timeout`) is far more likely a DHCP lease
+/// having moved the device than a device that vanished, so that case falls
+/// back to a fresh mDNS lookup and updates the cache with whatever it
+/// finds.
+///
+/// With no cache at all, this goes straight to mDNS and caches the result
+/// on success.
+fn connect(device: &Device, config_path: &Path) -> Result<Client, AppError> {
     let token = device.token_bytes()?;
-    let (addr, public_wire) = endpoint(device)?;
 
-    let transport = UdpTransport::connect(addr)?;
+    if let Some(cached) = &device.cached {
+        let public_wire = decode_public_key(&cached.public_key, &device.name)?;
+        let addr = SocketAddr::new(cached.address, cached.port);
+        match evaluate_cached_attempt(try_connect(addr, public_wire, token)) {
+            CachedAttempt::Connected(client) => return Ok(client),
+            CachedAttempt::StaleFallBackToDiscovery => {
+                // Fall through to discovery below.
+            }
+            CachedAttempt::Failed(err) => return Err(err),
+        }
+    }
+
+    let found = discover_device(device)?;
+    cache_endpoint(config_path, &device.name, found.address, found.port, found.public_wire);
+
+    let addr = SocketAddr::new(found.address, found.port);
+    try_connect(addr, found.public_wire, token).map_err(Into::into)
+}
+
+/// What to do after trying the cached endpoint, kept as a small pure
+/// function separate from `connect` so the one decision this finding is
+/// about -- fall back to discovery on a timeout, never on a rejected
+/// handshake -- can be unit tested without a real socket or session.
+enum CachedAttempt {
+    Connected(Client),
+    /// The cached address didn't answer at all: far more likely a stale
+    /// DHCP lease than a device that stopped existing, so it's worth a
+    /// fresh mDNS lookup.
+    StaleFallBackToDiscovery,
+    /// Anything else, most importantly `HandshakeRejected`: a wrong token
+    /// is not a stale address, and retrying via discovery would silently
+    /// mask that behind a slow, confusing retry instead of reporting it.
+    Failed(AppError),
+}
+
+fn evaluate_cached_attempt(result: Result<Client, syncleo::Error>) -> CachedAttempt {
+    match result {
+        Ok(client) => CachedAttempt::Connected(client),
+        Err(syncleo::Error::Timeout) => CachedAttempt::StaleFallBackToDiscovery,
+        Err(other) => CachedAttempt::Failed(other.into()),
+    }
+}
+
+fn try_connect(
+    addr: SocketAddr,
+    public_wire: [u8; 32],
+    token: [u8; 16],
+) -> Result<Client, syncleo::Error> {
+    let transport = UdpTransport::connect(addr).map_err(syncleo::Error::Io)?;
     // A fresh key pair per connection: nothing in the protocol expects our
     // side's private key to be stable across runs, and generating one lets
     // the CLI stay stateless between invocations.
     let our_private = rand::random::<[u8; 32]>();
-
-    Ok(Client::connect(Box::new(transport), our_private, public_wire, token, CONNECT_TIMEOUT)?)
+    Client::connect(Box::new(transport), our_private, public_wire, token, CONNECT_TIMEOUT)
 }
 
-/// Where to reach `device`, and the public key needed to derive the
-/// session keys: from its cached endpoint if it has one, otherwise from a
-/// fresh mDNS scan by MAC address.
-fn endpoint(device: &Device) -> Result<(SocketAddr, [u8; 32]), AppError> {
-    if let Some(cached) = &device.cached {
-        let public_wire = decode_public_key(&cached.public_key, &device.name)?;
-        Ok((SocketAddr::new(cached.address, cached.port), public_wire))
-    } else {
-        let discovery = MdnsDiscovery::new()?;
-        let found = discovery.find(&device.mac, DISCOVERY_TIMEOUT)?.ok_or_else(|| {
-            AppError::NotFound(format!(
-                "device '{}' (mac {}) was not found on the network",
-                device.name, device.mac
-            ))
-        })?;
-        Ok((SocketAddr::new(found.address, found.port), found.public_wire))
+/// Locate `device` on the network by its MAC address over mDNS.
+fn discover_device(device: &Device) -> Result<Found, AppError> {
+    let discovery = MdnsDiscovery::new()?;
+    discovery.find(&device.mac, DISCOVERY_TIMEOUT)?.ok_or_else(|| {
+        AppError::NotFound(format!(
+            "device '{}' (mac {}) was not found on the network",
+            device.name, device.mac
+        ))
+    })
+}
+
+/// Persist a freshly discovered endpoint into `device_name`'s
+/// `[devices.cached]` entry and save the config. Reloads the config from
+/// disk rather than threading a `&mut Config` down from `main`, matching
+/// the pattern `commands::registry::alias_add`/`alias_rm` already use for
+/// the same reason: this is a one-shot process, so there is no in-memory
+/// config to keep in sync with the file besides what we re-read here.
+///
+/// A failure here (the config vanished, got wedged, the disk is full, ...)
+/// must not fail the command the user actually asked for -- the endpoint
+/// still works for *this* run, caching it is purely an optimisation for
+/// the next one. So this only warns on stderr and carries on.
+fn cache_endpoint(config_path: &Path, device_name: &str, address: IpAddr, port: u16, public_wire: [u8; 32]) {
+    if let Err(err) = try_cache_endpoint(config_path, device_name, address, port, public_wire) {
+        eprintln!("d3home: warning: could not cache the discovered endpoint for '{device_name}': {err}");
     }
+}
+
+fn try_cache_endpoint(
+    config_path: &Path,
+    device_name: &str,
+    address: IpAddr,
+    port: u16,
+    public_wire: [u8; 32],
+) -> Result<(), AppError> {
+    let mut config = Config::load(config_path)?;
+    let device = config
+        .devices
+        .iter_mut()
+        .find(|d| d.name == device_name)
+        .ok_or_else(|| ConfigError::UnknownDevice { name: device_name.to_string() })?;
+    device.cached = Some(Cached { address, port, public_key: hex_encode(&public_wire) });
+    config.save(config_path)?;
+    Ok(())
 }
 
 fn decode_public_key(hex: &str, device_name: &str) -> Result<[u8; 32], AppError> {
@@ -220,5 +307,84 @@ mod tests {
     fn refuses_a_malformed_cached_public_key() {
         assert!(decode_public_key("not hex", "kettle").is_err());
         assert!(decode_public_key("ab", "kettle").is_err());
+    }
+
+    #[test]
+    fn a_stale_cached_endpoint_falls_back_to_discovery() {
+        // A DHCP lease moving the device looks exactly like this from the
+        // client's side: the cached address simply never answers.
+        assert!(matches!(
+            evaluate_cached_attempt(Err(syncleo::Error::Timeout)),
+            CachedAttempt::StaleFallBackToDiscovery
+        ));
+    }
+
+    #[test]
+    fn a_rejected_handshake_on_the_cached_endpoint_never_falls_back() {
+        // A wrong token is not a stale address; retrying via discovery
+        // would silently mask the real problem behind a slow, confusing
+        // retry that was always going to fail the same way.
+        match evaluate_cached_attempt(Err(syncleo::Error::HandshakeRejected)) {
+            CachedAttempt::Failed(err) => assert_eq!(err.exit_code(), crate::cli::ExitCode::BadToken),
+            CachedAttempt::StaleFallBackToDiscovery => {
+                panic!("a rejected handshake must not fall back to discovery")
+            }
+            CachedAttempt::Connected(_) => unreachable!("Err(_) cannot produce Connected"),
+        }
+    }
+
+    #[test]
+    fn a_silence_timeout_on_the_cached_endpoint_does_not_fall_back() {
+        // Only Error::Timeout triggers the fallback. Error::Silence -- the
+        // session having *been* connected and then gone quiet -- cannot
+        // occur inside the initial handshake this path is on, but if it
+        // ever did, it should not be treated the same as never having
+        // connected at all.
+        match evaluate_cached_attempt(Err(syncleo::Error::Silence)) {
+            CachedAttempt::Failed(_) => {}
+            _ => panic!("Error::Silence must not trigger a fall back to discovery"),
+        }
+    }
+
+    fn sample_kettle_toml(token: &str) -> String {
+        format!(
+            "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"{token}\"\n"
+        )
+    }
+
+    #[test]
+    fn caching_a_discovered_endpoint_persists_address_port_and_public_key() {
+        let dir = std::env::temp_dir()
+            .join(format!("d3home-test-cache-endpoint-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(&path, sample_kettle_toml("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")).unwrap();
+
+        let public_wire = [0x77u8; 32];
+        try_cache_endpoint(&path, "kettle", "192.168.1.42".parse().unwrap(), 8888, public_wire)
+            .expect("caching a known device must succeed");
+
+        let reloaded = Config::load(&path).unwrap();
+        let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("cache was written");
+        assert_eq!(cached.address, "192.168.1.42".parse::<IpAddr>().unwrap());
+        assert_eq!(cached.port, 8888);
+        assert_eq!(cached.public_key, hex_encode(&public_wire));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn caching_an_endpoint_for_an_unknown_device_is_reported() {
+        let dir = std::env::temp_dir()
+            .join(format!("d3home-test-cache-endpoint-unknown-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        std::fs::write(&path, sample_kettle_toml("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")).unwrap();
+
+        let result =
+            try_cache_endpoint(&path, "teapot", "192.168.1.42".parse().unwrap(), 8888, [0u8; 32]);
+        assert!(result.is_err(), "caching an endpoint for a device that isn't in the config must fail");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

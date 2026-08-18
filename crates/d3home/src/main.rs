@@ -68,7 +68,7 @@ fn main() {
 /// the driver.
 fn dispatch(parsed: Parsed, config_path: &Path, json: bool) -> Result<(), AppError> {
     match parsed {
-        Parsed::Builtin(Builtin::Discover) => registry::discover(json),
+        Parsed::Builtin(Builtin::Discover) => registry::discover(config_path, json),
         Parsed::Builtin(Builtin::Devices) => {
             let config = Config::load(config_path)?;
             registry::devices(&config, json);
@@ -88,7 +88,7 @@ fn dispatch(parsed: Parsed, config_path: &Path, json: bool) -> Result<(), AppErr
                 .resolve(&device)
                 .cloned()
                 .ok_or_else(|| ConfigError::UnknownDevice { name: device.clone() })?;
-            run_device(&found, &action, json)
+            run_device(&found, &action, json, config_path)
         }
     }
 }
@@ -97,9 +97,9 @@ fn dispatch(parsed: Parsed, config_path: &Path, json: bool) -> Result<(), AppErr
 /// (the kettle); a second driver would get its own arm here and its own
 /// sibling of `commands::kettle`, without anything above this function
 /// changing.
-fn run_device(device: &config::Device, action: &[String], json: bool) -> Result<(), AppError> {
+fn run_device(device: &config::Device, action: &[String], json: bool, config_path: &Path) -> Result<(), AppError> {
     match device.driver.as_str() {
-        "syncleo" => kettle::run(device, action, json),
+        "syncleo" => kettle::run(device, action, json, config_path),
         other => Err(AppError::Usage(format!("device '{}' has unknown driver '{other}'", device.name))),
     }
 }
