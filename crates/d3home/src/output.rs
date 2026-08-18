@@ -36,19 +36,19 @@ fn fmt_flag(b: Option<bool>) -> &'static str {
     }
 }
 
-/// Renders code 9's raw byte as a plain number, or `unknown` if the device
-/// never reported it. Deliberately not `yes`/`no`, and deliberately not
-/// wrapped in any interpreted unit: what this byte counts is not
-/// established (see [`Event::Volume`]'s doc comment), so the honest thing
-/// to show is the number itself, not a guess dressed up as a reading.
-fn fmt_volume(v: Option<u8>) -> String {
-    v.map_or_else(|| "unknown".to_string(), |v| v.to_string())
-}
-
 /// Print everything a [`crate::commands::kettle`] status check learned
 /// about the device, either as one JSON object or as human-readable lines.
 pub fn print_state(state: &DeviceState, json: bool) {
     if json {
+        // `volume` (code 9) stays in the JSON form even though, on the
+        // evidence gathered so far, it is useless: it read 0 on an empty
+        // kettle, 0 with a full litre of water in it, and 0 immediately
+        // after a full boil to 98°C. `--json` is where completeness beats
+        // tidiness -- it's the shape anyone investigating the protocol
+        // will look at -- so the field stays here even though the human
+        // view below has stopped showing it. See [`Event::Volume`]'s doc
+        // comment for what the byte is believed to be (nothing, on this
+        // model).
         let value = json!({
             "current_temperature": state.current_temperature,
             "target_temperature": state.target_temperature,
@@ -59,10 +59,19 @@ pub fn print_state(state: &DeviceState, json: bool) {
         });
         println!("{value}");
     } else {
+        // No `volume` row here, deliberately. Three real-device readings
+        // (empty, a full litre, and straight after boiling to 98°C) all
+        // came back 0 -- the most likely explanation being that this
+        // model, part of a Polaris IQ Home range that shares the wire
+        // protocol, simply has no sensor behind code 9. A row that is
+        // always zero and whose name we cannot justify is noise in a
+        // status readout whose whole reason to exist is being less
+        // annoying than the vendor app. The data itself is untouched --
+        // `DeviceState::volume` and `Event::Volume` still carry it, `watch`
+        // still prints it, and `--json` above still includes it.
         println!("mode:                {}", state.mode.map(mode_str).unwrap_or("unknown"));
         println!("current temperature: {}", fmt_temperature(state.current_temperature));
         println!("target temperature:  {}", fmt_temperature(state.target_temperature));
-        println!("volume:               {}", fmt_volume(state.volume));
         println!("error:               {}", fmt_flag(state.error));
         println!("child lock:          {}", fmt_flag(state.child_lock));
     }

@@ -212,6 +212,55 @@ fn status_against_a_device_that_reports_no_state_exits_with_the_timeout_code() {
 }
 
 #[test]
+fn human_status_output_has_no_volume_row() {
+    // Measured against the real device: 0 empty, 0 with a full litre of
+    // water, 0 right after a full boil to 98°C. A permanently-zero row
+    // under a name we can't justify is noise, so the human view stops
+    // showing it (see `output::print_state`). The simulator's default
+    // volume byte is 42 (non-zero, non-default-looking), which would show
+    // up plainly if this regressed.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+
+    let output = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "kettle", "status"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.to_lowercase().contains("volume"), "human status output still mentions volume: {stdout}");
+
+    handle.shutdown();
+}
+
+#[test]
+fn json_status_output_still_carries_volume() {
+    // The field is still real data (`DeviceState::volume`, `Event::Volume`)
+    // even though the human view no longer prints it -- `--json` is where
+    // completeness matters more than tidiness, and where anyone
+    // investigating the protocol will look.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+
+    let output = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "status"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is valid json");
+    assert_eq!(value["volume"], 42, "the simulator's default volume byte should still be reported");
+
+    handle.shutdown();
+}
+
+#[test]
 fn a_temperature_outside_the_supported_range_is_a_usage_error() {
     let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
     let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
