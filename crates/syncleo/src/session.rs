@@ -88,6 +88,17 @@ pub struct Session {
     /// Set once the session reaches a terminal state (a `Lost` was emitted).
     /// Further input is ignored rather than re-triggering terminal actions.
     dead: bool,
+    /// Which [`LostReason`] made `dead` true, or `None` while the session
+    /// is still alive. Set in lockstep with `dead` -- always `Some` exactly
+    /// when `dead` is `true` -- so a caller can ask [`Session::last_lost`]
+    /// and tell "already dead" from "still waiting" without polling `step`
+    /// for a full round of ticks. This exists for `client::Client::send`'s
+    /// guard: `request`/`step` intentionally go quiet once `dead` (see
+    /// their own doc comments), and without this, a caller that kept a
+    /// `Client` past its first `Lost` -- not something this codebase does
+    /// today, but nothing stops one from existing -- had no way to learn
+    /// the session was already dead except waiting out its own deadline.
+    last_lost: Option<LostReason>,
     pending: Option<Pending>,
     last_incoming: Millis,
     last_ping: Millis,
@@ -110,6 +121,7 @@ impl Session {
             next_seq: 0,
             connected: false,
             dead: false,
+            last_lost: None,
             pending: None,
             last_incoming: now,
             last_ping: now,
@@ -124,6 +136,12 @@ impl Session {
 
     pub fn is_connected(&self) -> bool {
         self.connected
+    }
+
+    /// Why the session declared itself dead, or `None` while it's still
+    /// alive. See the `last_lost` field's doc comment for why this exists.
+    pub fn last_lost(&self) -> Option<LostReason> {
+        self.last_lost
     }
 
     fn take_seq(&mut self) -> u8 {
@@ -186,6 +204,7 @@ impl Session {
                     // The device rejected our token: this is terminal, there
                     // is no retry that fixes a bad token.
                     self.dead = true;
+                    self.last_lost = Some(LostReason::HandshakeRejected);
                     self.pending = None;
                     actions.push(Action::Lost(LostReason::HandshakeRejected));
                 } else if let Some(pending) = &self.pending
@@ -256,6 +275,7 @@ impl Session {
     fn on_tick(&mut self, now: Millis) -> Vec<Action> {
         if now.0.saturating_sub(self.last_incoming.0) >= SILENCE_TIMEOUT_MS {
             self.dead = true;
+            self.last_lost = Some(LostReason::Silence);
             self.connected = false;
             self.pending = None;
             return vec![Action::Lost(LostReason::Silence)];
@@ -271,6 +291,7 @@ impl Session {
             // — a frozen slot would silently disable the ping heartbeat for
             // the rest of the session's life with no signal to the caller.
             self.dead = true;
+            self.last_lost = Some(LostReason::Unacknowledged);
             self.connected = false;
             self.pending = None;
             return vec![Action::Lost(LostReason::Unacknowledged)];

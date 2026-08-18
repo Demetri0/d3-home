@@ -117,6 +117,9 @@ impl Client {
     /// Send a command to the device and block until it is acknowledged, the
     /// connection is declared lost, or [`SEND_DEADLINE`] elapses.
     pub fn send(&mut self, cmd: Command) -> Result<(), Error> {
+        if let Some(err) = self.already_lost() {
+            return Err(err);
+        }
         let now = self.now();
         let actions = self.session.request(cmd, now);
         self.perform(&actions)?;
@@ -167,6 +170,9 @@ impl Client {
     /// exit code 0, and a script would have no way to distinguish them. Any
     /// field actually set still counts as a real (if partial) success.
     pub fn collect_state(&mut self, quiet: Duration, overall: Duration) -> Result<DeviceState, Error> {
+        if let Some(err) = self.already_lost() {
+            return Err(err);
+        }
         let mut state = DeviceState::default();
         let overall_deadline = Instant::now() + overall;
         // Set once the first event of any kind arrives; from then on it is
@@ -219,6 +225,9 @@ impl Client {
         &mut self,
         mut on_event: impl FnMut(Event) -> ControlFlow<()>,
     ) -> Result<(), Error> {
+        if let Some(err) = self.already_lost() {
+            return Err(err);
+        }
         loop {
             let actions = self.pump(POLL_INTERVAL)?;
             for action in actions {
@@ -233,6 +242,24 @@ impl Client {
                 }
             }
         }
+    }
+
+    /// Whether the session backing this client has already declared itself
+    /// dead, translated into the `Error` a caller would eventually see from
+    /// `pump` if it kept polling. `None` while the session is still alive.
+    ///
+    /// Finding 11: every caller in this codebase today drops its `Client`
+    /// the moment it sees the *first* `Lost`, so this guard is unreachable
+    /// from any of them -- but nothing enforces that a caller must. Once
+    /// `dead`, `Session::step`/`request` return no actions at all (by
+    /// design: see `Session`'s own doc comments), so without this,
+    /// `send`/`collect_state`/`watch` on an already-dead session polled
+    /// uselessly until *that call's own* deadline gave up -- 8 seconds for
+    /// `send`, `overall` for `collect_state`, forever for `watch` (it has
+    /// none of its own). This turns that into an immediate, well-typed
+    /// error instead of a silent stall.
+    fn already_lost(&self) -> Option<Error> {
+        self.session.last_lost().map(lost_to_error)
     }
 
     fn now(&self) -> Millis {
@@ -263,5 +290,80 @@ impl Client {
         };
         self.perform(&actions)?;
         Ok(actions)
+    }
+}
+
+#[cfg(test)]
+impl Client {
+    /// Test-only: build a `Client` around an already-constructed `Session`,
+    /// skipping the real handshake entirely. Lets a test drive the session
+    /// to `Lost` purely on its own virtual clock (instant -- see
+    /// `Session`'s module doc comment) and then exercise `Client`'s
+    /// already-dead guard without waiting out any real deadline.
+    fn from_parts(transport: Box<dyn Transport>, session: Session) -> Client {
+        Client { transport, session, start: Instant::now() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A transport that never delivers anything and never fails to send:
+    /// enough to drive a `Client` whose session is already dead, without
+    /// any real socket or peer.
+    struct NullTransport;
+
+    impl Transport for NullTransport {
+        fn send(&mut self, _bytes: &[u8]) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn recv(&mut self, _timeout: Duration) -> std::io::Result<Option<Vec<u8>>> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn send_on_an_already_dead_session_fails_immediately_instead_of_waiting_out_the_deadline() {
+        // Finding 11: once a session has declared itself dead, `send`
+        // used to have no way to tell that apart from "still waiting" and
+        // kept polling for the full 8-second SEND_DEADLINE before
+        // reporting a timeout. Reaching `Lost` here costs no real time at
+        // all: it's driven entirely on the session's own virtual clock
+        // (the 15s silence timeout, fed as a single `Tick` at exactly that
+        // offset), not real wall-clock waiting.
+        let (mut session, _initial) = Session::new([1; 32], [2; 32], [0xAA; 16], Millis(0));
+        let lost = session.step(Input::Tick, Millis(15_000));
+        assert!(
+            lost.iter().any(|a| matches!(a, Action::Lost(LostReason::Silence))),
+            "the session must have declared itself dead by now: {lost:?}"
+        );
+        assert_eq!(session.last_lost(), Some(LostReason::Silence));
+
+        let mut client = Client::from_parts(Box::new(NullTransport), session);
+
+        let start = Instant::now();
+        let err = client.send(Command::Ping).expect_err("a dead session must never accept a new command");
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "must fail immediately, not wait out SEND_DEADLINE: took {:?}",
+            start.elapsed()
+        );
+        assert!(matches!(err, Error::Silence), "got {err:?}");
+    }
+
+    #[test]
+    fn watch_on_an_already_dead_session_fails_immediately() {
+        // Same guard, the caller with no deadline of its own at all: a
+        // `watch()` call on an already-dead session used to poll forever.
+        let (mut session, _initial) = Session::new([1; 32], [2; 32], [0xAA; 16], Millis(0));
+        session.step(Input::Tick, Millis(15_000));
+
+        let mut client = Client::from_parts(Box::new(NullTransport), session);
+
+        let start = Instant::now();
+        let err = client.watch(|_| ControlFlow::Continue(())).expect_err("must not watch a dead session");
+        assert!(start.elapsed() < Duration::from_millis(500), "must fail immediately, took {:?}", start.elapsed());
+        assert!(matches!(err, Error::Silence), "got {err:?}");
     }
 }
