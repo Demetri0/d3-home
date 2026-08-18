@@ -140,7 +140,7 @@ impl Discovery for MdnsDiscovery {
         // regardless, so a failure to unregister the browse here changes
         // nothing observable.
         let _ = self.daemon.stop_browse(SERVICE_TYPE);
-        Ok(found)
+        Ok(dedupe_by_mac(found))
     }
 
     fn find(&self, mac: &str, timeout: Duration) -> Result<Option<Found>, Error> {
@@ -209,6 +209,39 @@ pub fn parse_service(
     let public_wire = decode_public_key(public_hex)?;
 
     Ok(Found { mac, address, interface, port, public_wire, curve, protocol })
+}
+
+/// Keep at most one [`Found`] per MAC address.
+///
+/// `find_all` pushes every resolved record that parses with nothing keying
+/// on MAC, so a device resolved more than once within one scan window --
+/// once per interface on a machine with both Wi-Fi and Ethernet on the same
+/// LAN, or a bare re-announce -- used to come back as two (or more) entries
+/// for the same device, each with its own address. `discover` would then
+/// list it twice, and `cache_discovered`/`find` would silently take
+/// whichever happened to be first, which could be the interface that's
+/// about to go down.
+///
+/// When two records share a MAC, a globally usable address wins over a
+/// link-local one -- the same preference [`select_address`] already
+/// applies *within* one record, extended here to apply *across* every
+/// record this scan collected. Between two records of equal "quality," the
+/// first one seen wins: nothing in the protocol says which of two
+/// identical-looking records is more current, so this is at least
+/// deterministic. Kept pure and separate from `find_all`'s I/O loop so it
+/// can be tested without a real multicast socket.
+fn dedupe_by_mac(found: Vec<Found>) -> Vec<Found> {
+    let mut kept: Vec<Found> = Vec::with_capacity(found.len());
+    for candidate in found {
+        match kept.iter().position(|f| f.mac == candidate.mac) {
+            Some(i) if is_globally_usable(&candidate.address) && !is_globally_usable(&kept[i].address) => {
+                kept[i] = candidate;
+            }
+            Some(_) => {}
+            None => kept.push(candidate),
+        }
+    }
+    kept
 }
 
 /// Pick the address to connect to, and the interface scope (if any) that
@@ -449,6 +482,56 @@ mod tests {
             &txt("abcd", "29", "2"),
         )
         .is_err());
+    }
+
+    fn found_with(mac: &str, address: ScopedAddr) -> Found {
+        Found {
+            mac: mac.into(),
+            address: address.addr,
+            interface: address.interface,
+            port: 8888,
+            public_wire: [0xAB; 32],
+            curve: 29,
+            protocol: 2,
+        }
+    }
+
+    #[test]
+    fn find_all_keeps_only_one_record_per_mac_preferring_a_global_address() {
+        // Finding 16: a device resolved on more than one interface within
+        // one scan window used to come back once per interface. This pins
+        // the dedupe: the same MAC seen twice collapses to one entry, and
+        // a global address wins over a link-local one regardless of which
+        // was seen first.
+        let global = found_with("aabbccddeeff", v4(Ipv4Addr::new(192, 168, 1, 42)));
+        let link_local = found_with("aabbccddeeff", v6(kettle_link_local(), Some("enp8s0")));
+
+        let link_local_first = dedupe_by_mac(vec![link_local.clone(), global.clone()]);
+        assert_eq!(link_local_first, vec![global.clone()], "a global address must win regardless of order");
+
+        let global_first = dedupe_by_mac(vec![global.clone(), link_local]);
+        assert_eq!(global_first, vec![global]);
+    }
+
+    #[test]
+    fn find_all_keeps_devices_with_different_macs_separate() {
+        let a = found_with("aabbccddeeff", v4(Ipv4Addr::new(192, 168, 1, 42)));
+        let b = found_with("112233445566", v4(Ipv4Addr::new(192, 168, 1, 43)));
+
+        let kept = dedupe_by_mac(vec![a.clone(), b.clone()]);
+        assert_eq!(kept, vec![a, b]);
+    }
+
+    #[test]
+    fn find_all_keeps_the_first_seen_record_when_neither_candidate_is_better() {
+        // Two link-local records for the same MAC, on different
+        // interfaces: nothing in the protocol says which is more current,
+        // so the first one seen must win, deterministically.
+        let first = found_with("aabbccddeeff", v6(kettle_link_local(), Some("enp8s0")));
+        let second = found_with("aabbccddeeff", v6(kettle_link_local(), Some("wlan0")));
+
+        let kept = dedupe_by_mac(vec![first.clone(), second]);
+        assert_eq!(kept, vec![first]);
     }
 
     // Ignored by default: this starts a real `mdns_sd::ServiceDaemon`,
