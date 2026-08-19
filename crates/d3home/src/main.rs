@@ -9,6 +9,10 @@ mod clock;
 mod commands;
 mod config;
 mod keys;
+// Nothing calls into this yet -- the daemon that will is the next commit,
+// and the allowance goes away with it.
+#[allow(dead_code)]
+mod notify;
 mod output;
 mod progress;
 mod screen;
