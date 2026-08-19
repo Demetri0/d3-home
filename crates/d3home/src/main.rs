@@ -23,12 +23,17 @@ use config::{Config, ConfigError};
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
 
-    let result = run(&argv);
+    // Scanned here, separately from the authoritative parse in `run`, purely
+    // to decide how a failure should be *shaped*. The real parse is allowed
+    // to fail, and a parse failure is exactly the case that still has to be
+    // reported in the form the caller asked for.
+    let json = argv.iter().any(|arg| arg == "--json");
+    output::set_json(json);
 
-    match result {
+    match run(&argv) {
         Ok(()) => std::process::exit(ExitCode::Ok as i32),
         Err(err) => {
-            eprintln!("d3home: {err}");
+            output::print_error(&err, json);
             std::process::exit(err.exit_code() as i32);
         }
     }
@@ -71,7 +76,7 @@ fn dispatch(parsed: Parsed, config_path: &Path, json: bool) -> Result<(), AppErr
                 request.mac = add::pick_discovered();
             }
             let device = add::resolve(request, prompt)?;
-            add::write(config_path, device)
+            add::write(config_path, device, json)
         }
         Parsed::Builtin(Builtin::Completions { shell }) => complete::script(&shell),
         Parsed::Builtin(Builtin::Complete { words }) => {

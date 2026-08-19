@@ -200,6 +200,20 @@ pub enum AppError {
 }
 
 impl AppError {
+    /// A stable slug naming what went wrong, for a program rather than a
+    /// person. The wording of a message may be improved at any time; this
+    /// is the part a script is allowed to match on, alongside the exit code.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            AppError::Usage(_) => "usage",
+            AppError::NotFound(_) => "not_found",
+            AppError::BadToken => "bad_token",
+            AppError::Timeout(_) => "timeout",
+            AppError::Device(_) => "device",
+            AppError::Internal(_) => "internal",
+        }
+    }
+
     pub fn exit_code(&self) -> ExitCode {
         match self {
             AppError::Usage(_) => ExitCode::Usage,

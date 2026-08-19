@@ -319,7 +319,7 @@ fn stream(device: &Device, config_path: &Path, sink: &mut dyn output::EventSink)
         if quit.requested() {
             return Ok(());
         }
-        eprintln!("d3home: kettle went away ({err}); waiting for it to come back");
+        output::print_warning(&format!("kettle went away ({err}); waiting for it to come back"));
         // Finding 8: `connect_with` returns the `Cached` endpoint that
         // actually worked -- whether that was the one already cached or
         // one just found by discovery -- specifically so this can be
@@ -648,7 +648,9 @@ fn cache_endpoint(
     interface: Option<String>,
 ) {
     if let Err(err) = try_cache_endpoint(config_path, device_name, address, port, public_wire, interface) {
-        eprintln!("d3home: warning: could not cache the discovered endpoint for '{device_name}': {err}");
+        crate::output::print_warning(&format!(
+            "could not cache the discovered endpoint for '{device_name}': {err}"
+        ));
     }
 }
 

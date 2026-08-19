@@ -677,6 +677,62 @@ impl EventSink for TraceView {
     }
 }
 
+/// Report a failure.
+///
+/// `--json` changes the shape, not the stream: failures stay on stderr so
+/// that stdout carries only the answer and a redirect to a file is never
+/// polluted by an error. The exit code says what happened too, but a code
+/// alone cannot say *which* device or *what* the device reported.
+pub fn print_error(err: &crate::cli::AppError, json: bool) {
+    if json {
+        let value = json!({
+            "error": {
+                "kind": err.kind(),
+                "exit_code": err.exit_code() as i32,
+                "message": err.to_string(),
+            }
+        });
+        eprintln!("{value}");
+    } else {
+        eprintln!("d3home: {err}");
+    }
+}
+
+/// Whether this run was asked for machine-readable output.
+///
+/// A process-wide setting rather than an argument threaded everywhere,
+/// because the places that need it are as deep as `Config::load`'s
+/// permission check, and making the config layer take a presentation flag
+/// would be worse than this. Set once, at startup, in a single-shot CLI.
+static JSON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_json(json: bool) {
+    JSON.store(json, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn json_mode() -> bool {
+    JSON.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Something worth saying that is not a failure: the command carries on.
+/// Always stderr, so it never lands in the middle of the answer.
+pub fn print_warning(message: &str) {
+    if json_mode() {
+        eprintln!("{}", json!({ "warning": { "message": message } }));
+    } else {
+        eprintln!("d3home: warning: {message}");
+    }
+}
+
+/// Confirm a device was registered.
+pub fn print_added(name: &str, json: bool) {
+    if json {
+        println!("{}", json!({ "action": "add", "device": name }));
+    } else {
+        println!("added '{name}'");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

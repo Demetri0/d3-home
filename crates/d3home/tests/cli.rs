@@ -1004,3 +1004,120 @@ fn add_with_nothing_to_go_on_and_no_terminal_says_what_is_missing() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn under_json_a_failure_is_machine_readable_on_stderr() {
+    // The exit code says something went wrong; it cannot say which device,
+    // or what the device itself reported. `--json` changes the shape of that
+    // detail, not the stream it arrives on.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    let path = config.to_str().unwrap();
+
+    let assert = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "--json", "teapot", "status"])
+        .assert()
+        .code(2);
+    let output = assert.get_output();
+
+    assert!(output.stdout.is_empty(), "an error must not pollute stdout");
+    let value: serde_json::Value = serde_json::from_slice(&output.stderr)
+        .unwrap_or_else(|_| panic!("stderr is not json: {}", String::from_utf8_lossy(&output.stderr)));
+    assert_eq!(value["error"]["kind"], "usage");
+    assert_eq!(value["error"]["exit_code"], 2);
+    assert!(
+        value["error"]["message"].as_str().unwrap().contains("teapot"),
+        "the message should name what could not be found: {value}"
+    );
+
+    handle.shutdown();
+}
+
+#[test]
+fn the_error_kind_distinguishes_a_wrong_token_from_a_missing_device() {
+    // Both are failures a script may want to handle differently: one means
+    // fix the config, the other means the kettle is not there.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&[0xFF; 16]));
+
+    let assert = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "status"])
+        .assert()
+        .code(4);
+    let value: serde_json::Value = serde_json::from_slice(&assert.get_output().stderr).unwrap();
+    assert_eq!(value["error"]["kind"], "bad_token");
+    assert_eq!(value["error"]["exit_code"], 4);
+
+    handle.shutdown();
+}
+
+#[test]
+fn without_json_a_failure_stays_a_plain_sentence() {
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "teapot", "status"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::starts_with("d3home: "))
+        .stderr(predicate::str::contains("{").not());
+
+    handle.shutdown();
+}
+
+#[test]
+fn under_json_every_stderr_line_is_json_too() {
+    // A promise kept only for errors is worse than no promise: a script that
+    // parses stderr must not hit a bare sentence because one warning was
+    // missed. This drives a warning (loose config permissions) alongside a
+    // successful command.
+    use std::os::unix::fs::PermissionsExt;
+
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let assert = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "--json", "devices"])
+        .assert()
+        .success();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+
+    assert!(stderr.contains("warning"), "expected the permission warning, got: {stderr:?}");
+    for line in stderr.lines().filter(|l| !l.trim().is_empty()) {
+        serde_json::from_str::<serde_json::Value>(line)
+            .unwrap_or_else(|_| panic!("stderr line is not json: {line:?}"));
+    }
+
+    handle.shutdown();
+}
+
+#[test]
+fn add_confirms_itself_in_whichever_shape_was_asked_for() {
+    let dir = std::env::temp_dir().join(format!("d3home-addjson-{}-{}", std::process::id(), line!()));
+    let path = dir.join("devices.toml");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let args = [
+        "--config",
+        path.to_str().unwrap(),
+        "--json",
+        "add",
+        "--name",
+        "kettle",
+        "--mac",
+        "aabbccddeeff",
+        "--token",
+        "0123456789abcdef0123456789abcdef",
+    ];
+    let assert = Command::cargo_bin("d3home").unwrap().args(args).assert().success();
+    let value: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert_eq!(value["device"], "kettle");
+
+    std::fs::remove_dir_all(&dir).ok();
+}

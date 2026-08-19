@@ -25,7 +25,7 @@ pub fn discover(config_path: &Path, json: bool) -> Result<(), AppError> {
     output::print_found(&found, json);
 
     if let Err(err) = cache_discovered(config_path, &found) {
-        eprintln!("d3home: warning: could not update the device cache: {err}");
+        crate::output::print_warning(&format!("could not update the device cache: {err}"));
     }
     Ok(())
 }

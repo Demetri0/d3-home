@@ -227,7 +227,7 @@ pub fn resolve(request: AddRequest, prompt: bool) -> Result<Device, AppError> {
 
 /// Add `device` to the registry at `path`, creating the registry if this is
 /// the first device ever configured.
-pub fn write(path: &Path, device: Device) -> Result<(), AppError> {
+pub fn write(path: &Path, device: Device, json: bool) -> Result<(), AppError> {
     let mut config = match Config::load(path) {
         Ok(config) => config,
         // The first device is exactly when the file is supposed to appear.
@@ -246,7 +246,7 @@ pub fn write(path: &Path, device: Device) -> Result<(), AppError> {
     config.devices.push(device);
     config.validate()?;
     config.save(path)?;
-    println!("added '{name}'");
+    crate::output::print_added(&name, json);
     Ok(())
 }
 

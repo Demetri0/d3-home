@@ -414,7 +414,7 @@ fn warn_if_permissions_are_too_loose(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let Ok(metadata) = std::fs::metadata(path) else { return };
     if let Some(warning) = loose_permission_warning(path, metadata.permissions().mode()) {
-        eprintln!("{warning}");
+        crate::output::print_warning(&warning);
     }
 }
 
@@ -426,8 +426,10 @@ fn loose_permission_warning(path: &Path, mode: u32) -> Option<String> {
     if mode & 0o077 == 0 {
         return None;
     }
+    // No "d3home: warning:" prefix here: the printer owns the prefix, so the
+    // same sentence can also be wrapped as JSON without it leaking inside.
     Some(format!(
-        "d3home: warning: {} is readable or writable by more than its owner (mode {:03o}); it \
+        "{} is readable or writable by more than its owner (mode {:03o}); it \
          holds a device token -- consider `chmod 600 {}`",
         path.display(),
         mode & 0o777,
