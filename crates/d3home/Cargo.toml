@@ -2,6 +2,13 @@
 name = "d3home"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "Command line for smart home devices on the local network, starting with a Polaris kettle"
+license = "MIT OR Apache-2.0"
+keywords = ["cli", "polaris", "kettle", "smart-home", "iot"]
+categories = ["command-line-utilities", "network-programming"]
+readme = "../../README.md"
+# repository = "https://…"   # fill in once the remote exists
 
 [dependencies]
 dialoguer = { version = "0.12.0", default-features = false, features = ["password"] }

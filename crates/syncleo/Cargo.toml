@@ -2,6 +2,13 @@
 name = "syncleo"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "Client library for the Syncleo local UDP protocol used by Polaris IQ Home devices"
+license = "MIT OR Apache-2.0"
+keywords = ["polaris", "syncleo", "iot", "kettle", "protocol"]
+categories = ["command-line-utilities", "network-programming"]
+readme = "../../README.md"
+# repository = "https://…"   # fill in once the remote exists
 
 [features]
 default = []

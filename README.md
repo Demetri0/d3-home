@@ -3,18 +3,70 @@
 A command line for the smart devices in your home. The first of them is a
 Polaris PWK 1725CGLD kettle.
 
+```
+$ d3home kettle start 80
+heating to 80 °C
+
+$ d3home kettle status
+
+  kettle  PWK 1725CGLD  [syncleo]   ● custom
+
+  74 °C  ●●●●●●●●●●●●●●●●●●·······◉  80 °C
+
+  Current temperature  74 °C
+  Target temperature   80 °C
+  Child lock           no
+  Error                no
+```
+
 The tool talks to the kettle directly over the local network, in the device's
-own UDP protocol. **It never changes the device's configuration**, so the
-vendor's Polaris IQ Home app keeps working exactly as before — we are simply
+own UDP protocol. No cloud, no vendor account, no internet: unplug the router's
+uplink and it keeps working. **It never changes the device's configuration**, so
+the vendor's Polaris IQ Home app keeps working exactly as before — we are simply
 another client on the same network, and the kettle never learns otherwise.
 
-## Building
+## Status
+
+Working and in daily use, but young, and honest about its limits:
+
+- **One device.** The `syncleo` driver covers Polaris IQ Home kettles. It has
+  been exercised against a **PWK 1725CGLD, firmware 2.27.0, MCU 1.1.4**. Other
+  models in the range speak the same protocol and may well work; nobody has
+  tried.
+- **Linux.** It uses `termios`, `ioctl(TIOCGWINSZ)` and `if_nametoindex`, so it
+  is Unix-shaped; only Linux has been tested.
+- **The same network as the device.** There is no remote access, by design.
+- The protocol was reverse-engineered. It is pinned by golden vectors and
+  verified against real hardware, but it is not a vendor-supported interface and
+  a firmware update could change it.
+
+## Installing
+
+Rust 1.85 or newer (the crates use edition 2024).
 
 ```
-cargo build --release
+git clone <this repository>
+cd d3-home
+cargo install --path crates/d3home
 ```
 
-The binary lands in `target/release/d3home`.
+That puts `d3home` in `~/.cargo/bin`. To build without installing:
+
+```
+cargo build --release        # binary at target/release/d3home
+```
+
+## Quick start
+
+```
+d3home add                   # finds the kettle, asks for a name and a token
+d3home kettle status
+d3home kettle start 80
+```
+
+The token comes from the vendor app — see [Registering a device](#registering-a-device).
+If nothing is found, the usual culprit is a firewall dropping mDNS; see
+[When mDNS does not work](#when-mdns-does-not-work).
 
 ## Configuration
 
@@ -386,11 +438,12 @@ cargo test --workspace
 
 One test is marked `#[ignore]` — it needs a real network with working multicast.
 
-## What the real device taught us
+## The protocol
 
-Observations taken from an actual kettle — where it diverges from the reference,
-the structure of its telemetry, the unidentified commands:
-[`docs/hardware-notes.md`](docs/hardware-notes.md).
+[`docs/protocol.md`](docs/protocol.md) documents the wire protocol as the device
+actually speaks it: discovery, the key exchange and its three byte reversals,
+framing, encryption, the command table, and the places where a real kettle
+disagrees with the reference implementation.
 
 ## Not done yet
 
@@ -401,3 +454,33 @@ the structure of its telemetry, the unidentified commands:
 - Roborock vacuums and Alice BT remotes. The driver and the CLI are separated for
   exactly this.
 - Working from outside the home network.
+
+## Contributing
+
+Issues and patches are welcome, particularly:
+
+- **Another Polaris model.** If `d3home discover` sees your device and `status`
+  reads it, say so — that is the cheapest way to widen the tested range. If it
+  does not, `d3home <device> trace` is the output worth attaching.
+- **The two unidentified command codes**, 50 and 66. See
+  [`docs/protocol.md`](docs/protocol.md) for what has been ruled out already.
+
+`cargo test --workspace` and `cargo clippy --all-targets --workspace -- -D warnings`
+should both be clean. New behaviour comes with a test; the simulator in
+`crates/syncleo/src/simulator.rs` means you do not need a kettle to write one.
+
+## Credit
+
+The protocol was worked out from
+[gch1p/polaris_pwk_1725cgld](https://github.com/gch1p/polaris_pwk_1725cgld) by
+Evgeny Zinoviev (BSD-3-Clause) — a Python implementation known to drive the real
+device. This is an independent implementation in Rust, but without that work it
+would have been a great deal of packet-staring.
+
+## License
+
+MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0 ([LICENSE-APACHE](LICENSE-APACHE)),
+at your option.
+
+Unless you state otherwise, any contribution you submit for inclusion shall be
+dual-licensed as above, with no additional terms.
