@@ -83,6 +83,43 @@ pub trait Discovery {
     fn find(&self, mac: &str, timeout: Duration) -> Result<Option<Found>, Error>;
 }
 
+
+/// How long to keep listening after the device we were looking for answers.
+///
+/// Not zero: a device can be resolved on more than one interface, and a
+/// global address is worth more than a link-local one (see `dedupe_by_mac`).
+/// Stopping dead on the first record risks taking the worse of two that were
+/// milliseconds apart, so the scan lingers briefly and then decides.
+const GRACE_AFTER_MATCH: Duration = Duration::from_millis(300);
+
+/// How long a scan may still run.
+///
+/// Pure, with the clock passed in, so the shrink-on-match behaviour can be
+/// tested without waiting for anything or opening a socket.
+#[derive(Debug, Clone, Copy)]
+struct ScanWindow {
+    overall: Instant,
+    shortened: Option<Instant>,
+}
+
+impl ScanWindow {
+    fn new(now: Instant, timeout: Duration) -> Self {
+        Self { overall: now + timeout, shortened: None }
+    }
+
+    /// Called when the scan has what it came for. The window closes after
+    /// the grace period, or at the original deadline if that comes first.
+    fn satisfied(&mut self, now: Instant) {
+        let candidate = now + GRACE_AFTER_MATCH;
+        let deadline = candidate.min(self.overall);
+        self.shortened = Some(self.shortened.map_or(deadline, |existing| existing.min(deadline)));
+    }
+
+    fn remaining(&self, now: Instant) -> Duration {
+        self.shortened.unwrap_or(self.overall).saturating_duration_since(now)
+    }
+}
+
 /// The real, networked [`Discovery`]: owns an `mdns-sd` daemon.
 pub struct MdnsDiscovery {
     daemon: ServiceDaemon,
@@ -95,19 +132,16 @@ impl MdnsDiscovery {
     }
 }
 
-impl Discovery for MdnsDiscovery {
-    /// Browse `SERVICE_TYPE`, collecting `ServiceResolved` events until
-    /// `timeout` elapses. Each resolved record is run through
-    /// `parse_service`; records that fail to parse (a malformed neighbour,
-    /// an unsupported protocol version, an address made only of link-local
-    /// junk) are skipped rather than aborting the whole scan.
-    fn find_all(&self, timeout: Duration) -> Result<Vec<Found>, Error> {
+impl MdnsDiscovery {
+    /// Browse until `timeout`, or until `enough` recognises what we came
+    /// for and the grace period after it elapses.
+    fn scan(&self, timeout: Duration, mut enough: impl FnMut(&Found) -> bool) -> Result<Vec<Found>, Error> {
         let receiver = self.daemon.browse(SERVICE_TYPE).map_err(mdns_error)?;
-        let deadline = Instant::now() + timeout;
+        let mut window = ScanWindow::new(Instant::now(), timeout);
         let mut found = Vec::new();
 
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            let remaining = window.remaining(Instant::now());
             if remaining.is_zero() {
                 break;
             }
@@ -124,6 +158,9 @@ impl Discovery for MdnsDiscovery {
                     if let Ok(device) =
                         parse_service(info.get_fullname(), &addresses, info.get_port(), &txt)
                     {
+                        if enough(&device) {
+                            window.satisfied(Instant::now());
+                        }
                         found.push(device);
                     }
                 }
@@ -142,9 +179,30 @@ impl Discovery for MdnsDiscovery {
         let _ = self.daemon.stop_browse(SERVICE_TYPE);
         Ok(dedupe_by_mac(found))
     }
+}
+
+impl Discovery for MdnsDiscovery {
+    /// Browse `SERVICE_TYPE`, collecting `ServiceResolved` events until
+    /// `timeout` elapses. Each resolved record is run through
+    /// `parse_service`; records that fail to parse (a malformed neighbour,
+    /// an unsupported protocol version, an address made only of link-local
+    /// junk) are skipped rather than aborting the whole scan.
+    fn find_all(&self, timeout: Duration) -> Result<Vec<Found>, Error> {
+        // Nothing satisfies a scan for everything, so it always runs its
+        // full course.
+        self.scan(timeout, |_| false)
+    }
 
     fn find(&self, mac: &str, timeout: Duration) -> Result<Option<Found>, Error> {
-        Ok(self.find_all(timeout)?.into_iter().find(|device| device.mac == mac))
+        // Looking for one known device: once it has answered there is
+        // nothing left to wait for, and waiting anyway is the difference
+        // between a command that feels instant and one that takes five
+        // seconds. This matters more than it sounds -- the kettle rotates
+        // its keypair on every power loss, so a cached endpoint goes stale
+        // every time it is lifted off its base, and every one of those costs
+        // a scan.
+        let devices = self.scan(timeout, |device| device.mac == mac)?;
+        Ok(devices.into_iter().find(|device| device.mac == mac))
     }
 }
 
@@ -327,6 +385,48 @@ fn decode_public_key(hex: &str) -> Result<[u8; 32], Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scan_with_nothing_to_satisfy_it_runs_its_full_course() {
+        let now = Instant::now();
+        let window = ScanWindow::new(now, Duration::from_secs(5));
+        assert_eq!(window.remaining(now), Duration::from_secs(5));
+        assert_eq!(window.remaining(now + Duration::from_secs(2)), Duration::from_secs(3));
+    }
+
+    #[test]
+    fn finding_the_device_shortens_the_window_to_the_grace_period() {
+        // The whole point: a five-second scan that gets its answer after one
+        // second is over at 1.3 seconds, not at five.
+        let now = Instant::now();
+        let mut window = ScanWindow::new(now, Duration::from_secs(5));
+        let matched = now + Duration::from_secs(1);
+        window.satisfied(matched);
+        assert_eq!(window.remaining(matched), GRACE_AFTER_MATCH);
+        assert!(window.remaining(matched + GRACE_AFTER_MATCH).is_zero());
+    }
+
+    #[test]
+    fn the_grace_period_never_extends_the_original_deadline() {
+        // A match arriving just before time runs out must not buy the scan
+        // extra seconds it was never allowed.
+        let now = Instant::now();
+        let mut window = ScanWindow::new(now, Duration::from_millis(50));
+        window.satisfied(now + Duration::from_millis(40));
+        assert!(window.remaining(now + Duration::from_millis(50)).is_zero());
+    }
+
+    #[test]
+    fn a_later_match_does_not_push_the_window_back_out() {
+        // Several records for the same device arrive in a burst; the first
+        // one starts the clock and the rest must not keep resetting it.
+        let now = Instant::now();
+        let mut window = ScanWindow::new(now, Duration::from_secs(5));
+        window.satisfied(now + Duration::from_millis(100));
+        let first_close = window.remaining(now);
+        window.satisfied(now + Duration::from_millis(200));
+        assert_eq!(window.remaining(now), first_close, "the window drifted later");
+    }
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn txt(public: &str, curve: &str, protocol: &str) -> Vec<(String, String)> {
