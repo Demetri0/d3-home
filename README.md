@@ -1,29 +1,29 @@
 # d3home
 
-Консольное управление умными устройствами дома. Первое устройство — чайник
-Polaris PWK 1725CGLD.
+A command line for the smart devices in your home. The first of them is a
+Polaris PWK 1725CGLD kettle.
 
-Тулза говорит с чайником напрямую по локальной сети, по его собственному
-UDP-протоколу. **Настройки устройства при этом не меняются вообще**, поэтому
-штатное приложение Polaris IQ Home продолжает работать как работало — мы просто
-ещё один клиент в той же сети, и чайник об этом не «узнаёт».
+The tool talks to the kettle directly over the local network, in the device's
+own UDP protocol. **It never changes the device's configuration**, so the
+vendor's Polaris IQ Home app keeps working exactly as before — we are simply
+another client on the same network, and the kettle never learns otherwise.
 
-## Сборка
+## Building
 
 ```
 cargo build --release
 ```
 
-Бинарник окажется в `target/release/d3home`.
+The binary lands in `target/release/d3home`.
 
-## Конфиг
+## Configuration
 
-`~/.config/d3home/devices.toml`, права `0600`. Там лежит токен устройства —
-ключ от чайника, поэтому файл не место в репозитории и не место в бэкапах,
-которые кто-то читает. Если файл всё же оказался доступен на чтение кому-то
-кроме владельца (восстановили из бэкапа, скопировали `cp` без `-p`), `d3home`
-это заметит и выведет предупреждение в stderr при следующей загрузке конфига —
-но не откажется работать: файл при этом всё равно читается.
+`~/.config/d3home/devices.toml`, mode `0600`. It holds the device token — the
+key to the kettle — so the file belongs neither in a repository nor in a backup
+somebody else can read. If it does end up readable by more than its owner
+(restored from a backup, copied with `cp` and no `-p`), `d3home` notices and
+warns on stderr the next time it loads the config. It still works: the warning
+is a nudge, not a refusal.
 
 ```toml
 [[devices]]
@@ -34,173 +34,178 @@ model   = "PWK 1725CGLD"
 mac     = "deadbeefdead"
 token   = "..."
 
-# заполняется автоматически после первого удачного дискавери
+# filled in automatically after the first successful discovery
 [devices.cached]
 address    = "192.168.1.42"
 port       = 41122
 public_key = "..."
-# interface = "enp8s0"   # нужен, только если address — link-local IPv6 (fe80::/10)
+# interface = "enp8s0"   # only needed when address is a link-local IPv6 (fe80::/10)
 ```
 
-Чайник может анонсировать себя как по IPv4, так и по link-local IPv6 вида
-`fe80::…`. К такому адресу нельзя подключиться, не указав интерфейс, поэтому в
-кэш дополнительно попадает его имя. Имя, а не индекс: индексы интерфейсов
-переназначаются после перезагрузки, имена — нет.
+The kettle may advertise itself over IPv4 or as a link-local IPv6 address of the
+`fe80::…` form. You cannot connect to one of those without naming an interface,
+so the cache carries the interface name too. The name, not the index: interface
+indices are reassigned across a reboot, names are not.
 
-### Как добавить устройство
+### Registering a device
 
-Конфиг создаётся сам при первом `add`, руками писать TOML не нужно.
+The config creates itself on the first `add`. You never have to hand-write TOML.
 
-В приложении Polaris IQ Home поделитесь устройством — получится ссылка вида
+In the Polaris IQ Home app, share the device. You get a link of this shape:
 
 ```
 https://l.polaris-iot.com/device-share/polaris/57/deadbeefdead?token=deadbeefdeadbeefdeadbeefdeadbeef&name=PWK%201725CGLD
 ```
 
-Дальше три способа, любой на выбор:
+From there, three ways in — whichever suits the moment:
 
 ```
-d3home add "<ссылка>" --name kettle     # из ссылки: mac и токен берутся из неё
-d3home add                              # в терминале: покажет найденные устройства
-                                        # списком, спросит имя и токен
-d3home add --name kettle --mac deadbeefdead --token <токен>
+d3home add "<link>" --name kettle    # from the link: mac and token come out of it
+d3home add                           # in a terminal: lists what it found on the
+                                     # network, asks for a name and a token
+d3home add --name kettle --mac deadbeefdead --token <token>
 ```
 
-Интерактивный режим включается, только если в терминале есть кому отвечать: в
-пайпе или в скрипте команда не будет ничего спрашивать, а скажет, чего ей не
-хватает. Токен там вводится **скрыто** — он не попадёт ни на экран, ни в историю
-шелла, в отличие от способа с флагами. Регистр и
-разделители (`:`, `-`) в `mac` не важны — `d3home` приводит его к нижнему
-регистру без разделителей при загрузке конфига, так что и то, что показывает
-DHCP-таблица роутера (обычно заглавными буквами через двоеточие), тоже
-подойдёт как есть.
+Interactive mode only engages when there is somebody there to answer: in a pipe
+or a script it asks nothing and instead says precisely what it is missing. The
+token is read **without echoing** — it reaches neither the screen nor your shell
+history, unlike the flag form.
 
-### Алиасы
+Case and separators (`:`, `-`) in `mac` do not matter. `d3home` lowercases it and
+strips them when loading the config, so whatever your router's DHCP table shows
+(usually uppercase, colon-separated) can be pasted as it is.
 
-Первое слово после `d3home` — имя устройства или любой его алиас, а не зашитый
-тип. Поэтому `d3home k start 80` и `d3home чайник start 80` — одно и то же.
+### Aliases
+
+The first word after `d3home` is a device name, or any alias you gave it — not a
+hardcoded type. So `d3home k start 80` and `d3home чайник start 80` are the same
+command; aliases are not restricted to ASCII.
 
 ```
 d3home alias add k kettle
 d3home alias rm k
-d3home alias                  # показать все
+d3home alias                  # list them
 ```
 
-Алиас, совпадающий со встроенной командой (`discover`, `devices`, `alias`,
-`help`), с именем другого устройства или с чужим алиасом, отвергается при
-загрузке конфига с внятной ошибкой — а не выбирается молча наугад.
+An alias that collides with a built-in command (`discover`, `devices`, `alias`,
+`help`), with another device's name, or with another device's alias is rejected
+when the config loads, with an error naming the collision — rather than resolved
+silently and arbitrarily. The same goes for an empty alias, and for one starting
+with `-`: no argument parser can read that as a word, so such an alias could
+never be typed.
 
-Двоеточие в алиасе разрешено, так что группировать по комнатам можно прямо в
-имени: `kitchen:kettle`, `bath:heater`. Работает везде одинаково — как слово
-команды, под `--device` и в автодополнении. То же самое
-для пустого алиаса и алиаса, начинающегося с `-` (такой алиас не разберёт как
-слово ни один парсер аргументов, `--json`, например, `clap` заберёт себе как
-глобальный флаг ещё до того, как дойдёт до разрешения устройства).
+A colon is allowed, which makes grouping by room a matter of naming:
+`kitchen:kettle`, `bath:heater`. It works identically everywhere — as the command
+word, behind `--device`, and in completion.
 
-## Команды
-
-```
-d3home kettle status          # режим, текущая и целевая температура, ошибка
-d3home kettle start           # кипятить до 100 (синоним: on)
-d3home kettle start 80        # до 80
-d3home kettle set 80          # задать цель, не включая нагрев
-d3home kettle off             # остановить (синоним: stop)
-d3home kettle watch           # что происходит, до q или Ctrl-C, переподключается сам
-d3home kettle trace           # весь поток событий с кодами протокола
-
-d3home add                    # зарегистрировать устройство
-d3home completions fish       # скрипт автодополнения
-d3home discover               # что видно в сети
-d3home devices                # что настроено, с моделью, типом и MAC
-```
-
-Глобальные флаги: `--device <имя>`, `--json`, `--config <путь>`, `--help`, `--version`.
-
-Их можно ставить **в любом месте команды** — и до имени устройства, и после
-действия, и после его аргументов: `d3home kettle status --json` работает так же,
-как `d3home --json kettle status`. Если имя устройства или алиас начинается с
-дефиса, отделите его двойным дефисом: `d3home -- --strange status`.
-
-`start`, `set` и `off` печатают, о чём именно договорились с чайником. Причём не по
-факту подтверждения доставки: **ACK означает, что кадр дошёл, а не что устройство
-согласилось.** Чайник без воды или снятый с подставки исправно подтверждает кадр и
-не делает ничего. Поэтому после отправки состояние перечитывается, и сообщение
-описывает то, что произошло на самом деле; если чайник не включился — код возврата 6
-и объяснение, а не бодрое «heating to 100 °C».
-
-### `set` против `start`
-
-`start 80` включает нагрев до 80. `set 80` только записывает цель: чайник
-остаётся выключенным, а если он уже греется — цель меняется на лету.
-
-### `watch` и снятый с подставки чайник
-
-Чайник живёт на подставке далеко не всегда — его снимают, наливают воду,
-ставят обратно. Когда его снимают, он **обесточивается полностью**: это не
-разрыв связи, а выключение устройства, и вместе с питанием пропадает вся
-сессия — ключи, счётчики, факт авторизации. Продолжить её нельзя в принципе,
-так что `watch` при потере связи не завершается, а сам заново проходит весь
-цикл подключения: ищет чайник заново (адрес мог смениться — новый DHCP-лиз),
-делает хендшейк тем же токеном из конфига, открывает новую сессию. Между
-попытками — пауза с нарастанием: сначала короткая, дальше вдвое больше
-каждый раз, но не более пяти секунд, чтобы не долбить сеть, пока чайник
-где-то на столе с чаем внутри. Момент, когда чайник нашёлся заново, виден
-прямо в потоке событий: чайник высылает всё своё состояние заново при каждом
-подключении, и без пометки повторный блок событий выглядел бы как глюк, а не
-как новая сессия.
-
-Ждёт `watch` только связь: таймаут, тишину, неподтверждённую команду — всё,
-что неотличимо от «чайник сейчас без питания». Отклонённый токен или
-сломанный конфиг так не лечатся — это возвращает `watch` обычным кодом
-возврата, точно как раньше, без ожидания.
-
-`watch` рассчитан на то, что его вывод куда-то пайпят (`| jq`, в лог, в
-уведомитель), и если читающий конец закрылся раньше (`| head -1`, убитый
-уведомитель) — `watch` тихо завершается кодом 0, а не падает.
-
-Однократные команды (`status`, `start`, `off`) поведение не меняют: как ждали
-столько-то и завершались с ошибкой, если чайника нет, так и ждут — ждать
-чайника бесконечно в команде, которая должна просто выполниться и выйти,
-было бы хуже, а не лучше.
-
-## Как тулза находит чайник
-
-При первом обращении — mDNS-поиск сервиса `_syncleo._udp.local`. Найденные
-адрес, порт и публичный ключ записываются в `[devices.cached]`, и дальше команды
-идут сразу на известный адрес: без секундной задержки на поиск и без зависимости
-от того, ходит ли mDNS в этой сети.
-
-Если по закэшированному адресу устройство молчит — например, роутер выдал ему
-другой IP или чайник сменил ключи, — тулза сама откатывается на дискавери и
-обновляет кэш. Поиск конкретного устройства прекращается, как только оно
-отозвалось, а не ждёт весь отведённый срок: на живом чайнике это разница между
-4.4 и 8.8 секунды. Короткая отсрочка после ответа всё же выдерживается — устройство
-может отозваться сразу с нескольких адресов, и глобальный лучше link-local. То же самое
-происходит, если адрес вообще не удаётся превратить в сокет: например, у
-чайника закэширован link-local IPv6 через интерфейс, который с тех пор
-переименовали, отключили или заменили (индексы интерфейсов при этом не
-хранятся именно поэтому, см. выше) — это тоже просто повод откатиться на
-дискавери, а не внутренняя ошибка. А вот если чайник отвечает, но отвергает
-рукопожатие, откат не делается: неверный токен не лечится повторным поиском, и
-прятать эту ошибку за таймаутом было бы враньём.
-
-### Если mDNS не работает
-
-Самая частая причина на Linux — файрвол режет входящий UDP 5353. Проверить и
-открыть:
+## Commands
 
 ```
-sudo firewall-cmd --add-service=mdns              # до перезагрузки
-sudo firewall-cmd --permanent --add-service=mdns  # насовсем
+d3home kettle status          # mode, current and target temperature, error flag
+d3home kettle start           # boil to 100 (synonym: on)
+d3home kettle start 80        # heat to 80
+d3home kettle set 80          # set the target without starting
+d3home kettle off             # stop (synonym: stop)
+d3home kettle watch           # what is happening, until q or Ctrl-C; reconnects itself
+d3home kettle trace           # the whole event stream with protocol codes
+
+d3home add                    # register a device
+d3home completions fish       # print a completion script
+d3home discover               # what is visible on the network
+d3home devices                # what is configured, with model, driver and MAC
 ```
 
-Если mDNS в сети недоступен принципиально, `[devices.cached]` можно заполнить
-руками — `d3home discover` печатает публичный ключ именно для этого.
+Global flags: `--device <name>`, `--json`, `--config <path>`, `--help`,
+`--version`.
 
-### `watch` против `trace`
+They are accepted **anywhere on the command line** — before the device word,
+after the action, after the action's own arguments. `d3home kettle status --json`
+behaves exactly like `d3home --json kettle status`. If a device name or alias
+begins with a dash, separate it with a double dash: `d3home -- --strange status`.
 
-Чайник переприсылает одни и те же значения без остановки. `watch` показывает не
-отчёты, а **изменения** — момент, когда что-то произошло:
+`start`, `set` and `off` report what they and the kettle actually agreed on — and
+not on the strength of a delivery receipt. **An acknowledgement means the frame
+arrived, not that the device agreed to act on it.** A kettle with no water in it,
+or one lifted off its base, acknowledges perfectly well and then does nothing. So
+the state is read back after sending, and the message describes what really
+happened. If the kettle did not start, you get exit code 6 and an explanation
+rather than a cheerful "heating to 100 °C".
+
+### `set` versus `start`
+
+`start 80` begins heating to 80. `set 80` only records the target: the kettle
+stays off, and if it is already heating the target changes underneath it.
+
+### `watch` and a kettle lifted off its base
+
+A kettle spends plenty of its life off its base — lifted, filled, put back. When
+it is lifted it loses power **completely**: this is not a dropped connection but a
+device switching off, and the whole session goes with it — keys, counters, the
+fact that we were ever authorised. Resuming is impossible in principle.
+
+So `watch` does not exit when the connection dies. It runs the full cycle again:
+finds the kettle (the address may have changed on a new DHCP lease), performs the
+handshake with the same token from the config, opens a new session. Attempts back
+off — briefly at first, then twice as long each time, capped at five seconds, so
+it does not hammer the network while the kettle sits on a table with tea in it.
+The moment it returns is marked in the event stream, because the device replays
+its entire state on every connection and an unmarked repeat block would read as a
+glitch rather than as a new session.
+
+`watch` waits only on connectivity: a timeout, silence, an unacknowledged
+command — everything indistinguishable from "the kettle has no power right now".
+A rejected token or a broken config are not cured by waiting, and still return
+their exit code immediately, exactly as before.
+
+`watch` expects its output to be piped somewhere (`| jq`, a log, a notifier). If
+the reading end closes first (`| head -1`, a notifier that died), `watch` exits
+quietly with code 0 rather than crashing.
+
+Single-shot commands (`status`, `start`, `off`) are unchanged: they wait what they
+waited before and fail if the kettle is absent. Waiting forever in a command whose
+job is to run and exit would be worse, not better.
+
+## How the kettle is found
+
+On first use, an mDNS search for `_syncleo._udp.local`. The address, port and
+public key that come back are written to `[devices.cached]`, and later commands go
+straight to the known address — no second of searching, and no dependence on
+whether mDNS works on that network at all.
+
+When the cached address goes quiet — the router handed out a different IP, or the
+kettle rotated its keys — the tool falls back to discovery on its own and updates
+the cache. A search for one known device stops as soon as that device answers
+rather than running out its window: against the real kettle that is the difference
+between 4.4 and 8.8 seconds. It does linger briefly after the answer, because a
+device can resolve on several interfaces at once and a global address is worth
+more than a link-local one.
+
+The same fallback covers an address that cannot be turned into a socket at all — a
+cached link-local IPv6 whose interface has since been renamed, disabled or
+replaced (which is exactly why the index is not the thing stored). That is a stale
+cache, not an internal error.
+
+A kettle that answers but rejects the handshake is treated differently: no
+fallback. A wrong token is not cured by searching again, and hiding that behind a
+timeout would be a lie.
+
+### When mDNS does not work
+
+The usual cause on Linux is a firewall dropping inbound UDP 5353:
+
+```
+sudo firewall-cmd --add-service=mdns              # until reboot
+sudo firewall-cmd --permanent --add-service=mdns  # for good
+```
+
+If mDNS is unavailable on the network as a matter of principle,
+`[devices.cached]` can be filled in by hand — printing the public key is exactly
+what `d3home discover` is for.
+
+### `watch` versus `trace`
+
+The kettle repeats the same values endlessly. `watch` shows not the reports but
+the **changes** — the moment something happened:
 
 ```
 17:22:52  connected — 45 °C, idle
@@ -208,11 +213,10 @@ sudo firewall-cmd --permanent --add-service=mdns  # насовсем
 17:26:31  reached 98 °C, switched off
 ```
 
-Полоса при этом **сверху**, отделена от журнала пустой строкой. Полоса, пустая
-строка и последние полтора десятка строк журнала — это один блок, который
-перерисовывается на месте: курсор поднимается к началу, всё стирается и пишется
-заново. Настройки терминала при этом не трогаются вообще, поэтому восстанавливать
-после выхода нечего:
+The bar sits **above** the log, separated by a blank line. The bar, that blank
+line and the last fifteen log lines are one block, redrawn in place: the cursor
+moves back to its top, everything below is wiped, and it is printed again. No
+terminal setting is touched, so there is nothing to restore afterwards.
 
 ```
   71 °C  ●●●●●●●●●●●●●●●●●·······◉  100 °C
@@ -221,11 +225,12 @@ sudo firewall-cmd --permanent --add-service=mdns  # насовсем
 17:23:04  heating to 100 °C
 ```
 
-Диагностика, версия железа, контроль доступа и неопознанные коды в журнал не
-попадают: смотреть на кипящий чайник и разбирать протокол — разные занятия.
+Diagnostics, hardware versions, access control and the unidentified command codes
+stay out of the log: watching a kettle boil and taking a protocol apart are
+different jobs.
 
-`trace` — второе занятие. Всё подряд, со временем до миллисекунд и кодом команды
-рядом с расшифровкой:
+`trace` is the second job. Everything, with millisecond timestamps and the
+protocol code beside the decoded meaning:
 
 ```
 17:22:31.660  145  diagnostic: udps=61062937 IDLE=49428231 ppT=1201672 tiT=466229
@@ -233,71 +238,74 @@ sudo firewall-cmd --permanent --add-service=mdns  # насовсем
 17:22:31.719    2  target temperature: 0 °C
 ```
 
-На одной и той же пачке от устройства: `watch` — одна строка, `trace` — тринадцать.
-Именно `trace` и понадобится, чтобы однажды разгадать команды 50 и 66.
+On one and the same burst from the device, `watch` prints one line and `trace`
+prints thirteen. `trace` is what the two unidentified command codes will
+eventually be identified from.
 
-Под `--json` обе команды дают одно и то же — весь поток событий машинно, без
-фильтрации: это стрим для программы, а не для глаз.
+Under `--json` the two are identical — the whole event stream, unfiltered. That is
+a stream for a program, not for eyes.
 
-## Автодополнение
+## Completion
 
 ```
 d3home completions fish > ~/.config/fish/completions/d3home.fish
 d3home completions bash > ~/.local/share/bash-completion/completions/d3home
-d3home completions zsh  > ~/.zsh/completions/_d3home    # каталог должен быть в fpath
+d3home completions zsh  > ~/.zsh/completions/_d3home    # directory must be on fpath
 ```
 
-Дополняются не только встроенные команды, но и **имена твоих устройств вместе с
-алиасами** — они берутся из конфига в момент нажатия Tab, а не зашиты в скрипт.
-Поэтому после `d3home alias add k kettle` дополнение узнает `k` сразу, без
-перегенерации. Действия подсказываются по драйверу устройства, так что новый тип
-устройства принесёт свои действия сам.
+It completes not only the built-in commands but **your own device names and
+aliases** — read from the config at the moment you press Tab, not baked into the
+script. So `d3home alias add k kettle` makes `k` completable immediately, with
+nothing to regenerate. Actions are suggested per the device's driver, so a new
+kind of device brings its own.
 
-Если конфига нет или он сломан, дополнение всё равно предложит встроенные
-команды — сломанный конфиг не должен ощущаться как сломанный шелл.
+If the config is missing or broken, completion still offers the built-ins: a
+broken config should not feel like a broken shell.
 
-## Вывод
+## Output
 
-В терминале вывод оформленный: `status` печатает блок с выделенными значениями, а
-`watch` держит внизу живую строку — она появляется сразу при запуске, обновляется
-после **каждого** события и никуда не пропадает между показаниями. Во время нагрева
-это полоса прогресса вместо шестидесяти почти одинаковых строк: чайник присылает по
-строке на каждый градус.
+On a terminal the output is laid out: `status` prints a block with the values
+picked out, and `watch` keeps a live line that appears the moment it starts,
+updates after **every** event, and never disappears between readings. During a
+heat that line is a progress bar rather than sixty near-identical lines — the
+kettle sends one per degree.
 
-Шкала полосы **абсолютная, 0–100 °C**: одна клетка — четыре градуса, и она не
-пересчитывается при смене цели. Поэтому 40 °C выглядят одинаково, метит чайник в
-60 или в кипяток, и взгляд не приходится калибровать заново.
+The bar's scale is **absolute, 0–100 °C**: one cell is four degrees, and it does
+not rescale when the target changes. So 40 °C looks the same whether the kettle is
+heading for 60 or for boiling, and the eye never has to recalibrate.
 
-Цель отмечена кольцом `◉`. Цвет говорит о состоянии: греет — зелёные точки,
-выключен — белые. Так выключенный чайник с целью в памяти не спутать с идущим
-нагревом.
+The target is marked with a ring, `◉`. Colour carries the state: heating is green,
+idle is white. An idle kettle that still remembers a target is therefore never
+mistaken for one in progress.
 
 ```
   71 °C  ●●●●●●●●●●●●●●●●●●·······◉  100 °C
 ```
 
-Та же полоса печатается и в `status`, под показаниями. В заголовке блока — имя
-устройства, модель и драйвер, чтобы в реестре из нескольких устройств было видно,
-о каком речь.
+The same bar appears in `status`, under the heading. That heading names the
+device, its model and its driver, so a registry holding several devices stays
+legible.
 
-В пайпе блок не рисуется: там каждая строка важна, а перезатирать нечего — журнал
-идёт подряд, как обычный лог.
+In a pipe the block is not drawn at all: there every line matters and nothing can
+be overwritten, so the log runs straight down like any other log.
 
-`watch` завершается по **`q`** или по Ctrl-C. Ради одиночной клавиши терминал на
-время переводится в посимвольный режим — и возвращается обратно на любом пути
-выхода, включая сигнал: обработчик восстанавливает настройки прежде, чем процесс
-умрёт. Ctrl-C при этом продолжает работать как обычно, привычку тулза не ломает.
+`watch` exits on **`q`** or Ctrl-C. Reading a single keypress puts the terminal
+into character-at-a-time mode for the duration — and restores it on every exit
+path, including a signal, where a handler puts the settings back before the
+process dies. Ctrl-C keeps behaving exactly as it always did; the tool does not
+break the habit.
 
-В пайпе, в файле и под `--json` всё это выключается само: escape-последовательности
-посреди данных — не украшение, а порча. Уважаются `NO_COLOR` и `TERM=dumb`.
+In a pipe, in a file and under `--json` all of this switches itself off. Escape
+sequences in the middle of data are corruption, not decoration. `NO_COLOR` and
+`TERM=dumb` are honoured.
 
 ```
-d3home kettle status        # блок с цветом
-d3home kettle status | cat  # простые строки key: value
+d3home kettle status        # a block, in colour
+d3home kettle status | cat  # plain key: value lines
 NO_COLOR=1 d3home kettle status
 ```
 
-## Список устройств
+## Listing devices
 
 ```
 $ d3home devices
@@ -309,79 +317,87 @@ $ d3home devices
   endpoint  192.168.1.42:41122
 ```
 
-Опознавательный признак — **MAC, а не кусок токена**. MAC и так вещается по сети
-через mDNS, он не секрет, и именно он показан в админке роутера и в ссылке из
-приложения — то есть по нему запись в конфиге и связывается с железкой на столе.
-Печатать часть токена — привычка, которой лучше не заводить.
+The identifier shown is the **MAC, not a slice of the token**. The MAC is already
+broadcast over mDNS, so it is in no sense secret, and it is what the router's
+admin page and the vendor's share link both display — which is what ties a line in
+this list to an object on a worktop. Printing part of a secret is a habit worth
+not forming.
 
-## Коды возврата
+## Exit codes
 
-| Код | Что случилось |
-|-----|---------------|
-| 0 | успех |
-| 1 | внутренняя ошибка |
-| 2 | ошибка аргументов или конфига |
-| 3 | устройство не найдено в сети |
-| 4 | рукопожатие отклонено — не тот токен |
-| 5 | таймаут, устройство не отвечает |
-| 6 | устройство ответило отказом или сообщило об ошибке |
+| Code | What happened |
+|------|---------------|
+| 0 | success |
+| 1 | internal error |
+| 2 | bad arguments or bad config |
+| 3 | device not found on the network |
+| 4 | handshake rejected — wrong token |
+| 5 | timeout, device not answering |
+| 6 | device refused, or reported an error of its own |
 
-Под `--json` **и ошибки тоже машинные**. Форма меняется, поток — нет: сбои идут в
-stderr, чтобы stdout нёс только ответ и перенаправление в файл ничем не пачкалось.
+Under `--json`, **failures are machine-readable too**. The shape changes, the
+stream does not: failures go to stderr so that stdout carries only the answer and
+a redirect to a file is never polluted.
 
 ```
 $ d3home --json teapot status
 {"error":{"exit_code":2,"kind":"usage","message":"no device matches 'teapot'"}}
 ```
 
-`kind` — то, на что скрипту можно опираться: формулировку сообщения я могу
-улучшить в любой момент, слаг и код возврата — нет. Значения: `usage`,
-`not_found`, `bad_token`, `timeout`, `device`, `internal`.
+`kind` is what a script may rely on: the wording of a message can be improved at
+any time, the slug and the exit code cannot. The values are `usage`, `not_found`,
+`bad_token`, `timeout`, `device`, `internal`.
 
-Обещание распространяется на весь поток: под `--json` **каждая** строка в stderr —
-JSON, включая предупреждения. Обещание, выполненное только для ошибок, хуже, чем
-не данное вовсе: скрипт споткнётся ровно на том предупреждении, о котором забыли.
+The promise covers the whole stream: under `--json` **every** line on stderr is
+JSON, warnings included. A promise kept only for errors is worse than none at
+all — a parser would trip on precisely the warning that was overlooked.
 
-Команда считается успешной только после того, как чайник её подтвердил. Если
-подтверждения не было, код возврата это покажет — «успех» на непринятую команду
-не печатается.
+A command counts as successful only once the kettle has confirmed it. When there
+was no confirmation the exit code says so; success is never printed for a command
+the device did not take.
 
-## Как это устроено
+## How it is put together
 
-Два крейта:
+Two crates:
 
-- **`syncleo`** — протокол. Внутри жёстко разделены чистая часть (`codec`,
-  `session` — ни сокетов, ни системных часов, время передаётся аргументом) и
-  часть с вводом-выводом (`transport`, `client`, `discovery`). Поэтому конечный
-  автомат сессии тестируется на виртуальных часах: детерминированно и мгновенно.
-- **`d3home`** — CLI: реестр устройств, разбор аргументов, вывод, коды возврата.
+- **`syncleo`** — the protocol. Inside it, the pure part (`codec`, `session`: no
+  sockets, no system clocks, time arrives as an argument) is kept strictly apart
+  from the part that does I/O (`transport`, `client`, `discovery`). That is why
+  the session state machine is tested on a virtual clock — deterministically and
+  instantly.
+- **`d3home`** — the CLI: the device registry, argument parsing, output, exit
+  codes.
 
-Протокол переписан с нуля по Python-реализации
+The protocol was rewritten from scratch against the Python implementation at
 [gch1p/polaris_pwk_1725cgld](https://github.com/gch1p/polaris_pwk_1725cgld)
-(BSD-3c), которая точно ездит на живом устройстве. Криптография закреплена
-golden-векторами, снятыми с этой реализации: вывод ключей, шифрование кадров,
-рукопожатие, подтверждения и пинги сверяются побайтово.
+(BSD-3c), which is known to drive the real device. The cryptography is pinned by
+golden vectors captured from that implementation: key derivation, frame
+encryption, the handshake, acknowledgements and pings are all compared byte for
+byte.
 
-В крейте есть симулятор чайника (фича `simulator`, по умолчанию выключена, в
-боевой бинарник не попадает). Он реализует устройство-сторону протокола, что
-даёт сквозные тесты по настоящему UDP и позволяет разрабатывать, когда чайника
-нет под рукой.
+The crate carries a kettle simulator (feature `simulator`, off by default, never
+compiled into the shipped binary). It implements the device side of the protocol,
+which buys end-to-end tests over real UDP and makes development possible when the
+kettle is not at hand.
 
 ```
 cargo test --workspace
 ```
 
-Один тест помечен `#[ignore]` — ему нужна настоящая сеть с мультикастом.
+One test is marked `#[ignore]` — it needs a real network with working multicast.
 
-## Что выяснилось на живом устройстве
+## What the real device taught us
 
-Наблюдения, снятые с настоящего чайника, — расхождения с референсом, структура
-телеметрии, неопознанные команды: [`docs/hardware-notes.md`](docs/hardware-notes.md).
+Observations taken from an actual kettle — where it diverges from the reference,
+the structure of its telemetry, the unidentified commands:
+[`docs/hardware-notes.md`](docs/hardware-notes.md).
 
-## Что ещё не сделано
+## Not done yet
 
-- Фоновый демон и уведомления «вскипел». Слой сессии отдаёт события потоком, а
-  `watch` их просто печатает, так что уведомителю нужен тот же поток и живущий
-  процесс — протокол этому не мешает.
-- Roborock и BT-пульты. Драйвер и CLI разделены ровно ради этого.
-- Работа из-за пределов домашней сети.
+- A background daemon and "it boiled" notifications. The session layer already
+  hands events outward as a stream and `watch` merely prints them, so a notifier
+  needs the same stream and a long-lived process — the protocol does not stand in
+  the way.
+- Roborock vacuums and Alice BT remotes. The driver and the CLI are separated for
+  exactly this.
+- Working from outside the home network.
