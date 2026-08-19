@@ -118,11 +118,11 @@ pub fn help_text() -> String {
     out.push_str("your config -- so `d3home k start 80` works once `k` is an alias.\n\n");
     out.push_str("KETTLE ACTIONS:\n");
     out.push_str("    status              show mode, temperature and flags\n");
-    out.push_str("    start               heat to 100 C\n");
+    out.push_str("    start, on           heat to 100 C\n");
     out.push_str("    start <temp>        heat to <temp> C\n");
     out.push_str("    set <temp>          set the target without starting, or retarget\n");
     out.push_str("                        a heat already running\n");
-    out.push_str("    off                 stop heating\n");
+    out.push_str("    off, stop           stop heating\n");
     out.push_str("    watch               stream events until interrupted; reconnects\n");
     out.push_str("                        by itself when the kettle is put back\n\n");
     out.push_str("BUILTINS:\n");

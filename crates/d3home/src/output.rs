@@ -27,7 +27,8 @@ fn yes_no(b: bool) -> &'static str {
 }
 
 fn fmt_temperature(t: Option<u8>) -> String {
-    t.map_or_else(|| "unknown".to_string(), |v| format!("{v}\u{b0}C"))
+    // A space before the unit, as the SI writes it: "34 °C", not "34°C".
+    t.map_or_else(|| "unknown".to_string(), |v| format!("{v} \u{b0}C"))
 }
 
 fn fmt_flag(b: Option<bool>) -> &'static str {
@@ -92,11 +93,11 @@ fn state_rich(state: &DeviceState, device: &str, style: Style) -> String {
     out.push_str("\n\n");
 
     let rows: [(&str, String); 4] = [
-        ("temperature", fmt_rich_temperature(state.current_temperature, false)),
-        ("target", fmt_rich_temperature(state.target_temperature, true)),
-        ("child lock", fmt_flag(state.child_lock).to_string()),
+        ("Current temperature", fmt_rich_temperature(state.current_temperature, false)),
+        ("Target temperature", fmt_rich_temperature(state.target_temperature, true)),
+        ("Child lock", fmt_flag(state.child_lock).to_string()),
         (
-            "error",
+            "Error",
             match state.error {
                 Some(true) => style.red("yes"),
                 other => fmt_flag(other).to_string(),
@@ -107,7 +108,7 @@ fn state_rich(state: &DeviceState, device: &str, style: Style) -> String {
         // Pad before painting: escape sequences have no width on screen but
         // every byte counts to `{:<14}`, so colouring first would push the
         // values out of line by exactly the length of the escape.
-        out.push_str(&format!("  {}{}\n", style.dim(&format!("{label:<14}")), value));
+        out.push_str(&format!("  {}{}\n", style.dim(&format!("{label:<21}")), value));
     }
     out.pop();
     out
@@ -148,11 +149,11 @@ pub fn print_state(state: &DeviceState, device: &str, json: bool) {
         if style.is_rich() {
             let _ = write_line(&state_rich(state, device, style));
         } else {
-            let _ = write_line(&format!("mode:                {}", state.mode.map(mode_str).unwrap_or("unknown")));
-            let _ = write_line(&format!("current temperature: {}", fmt_temperature(state.current_temperature)));
-            let _ = write_line(&format!("target temperature:  {}", fmt_temperature(state.target_temperature)));
-            let _ = write_line(&format!("error:               {}", fmt_flag(state.error)));
-            let _ = write_line(&format!("child lock:          {}", fmt_flag(state.child_lock)));
+            let _ = write_line(&format!("Mode:                {}", state.mode.map(mode_str).unwrap_or("unknown")));
+            let _ = write_line(&format!("Current temperature: {}", fmt_temperature(state.current_temperature)));
+            let _ = write_line(&format!("Target temperature:  {}", fmt_temperature(state.target_temperature)));
+            let _ = write_line(&format!("Child lock:          {}", fmt_flag(state.child_lock)));
+            let _ = write_line(&format!("Error:               {}", fmt_flag(state.error)));
         }
     }
 }

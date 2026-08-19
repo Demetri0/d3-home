@@ -80,12 +80,14 @@ pub fn run(device: &Device, action: &[String], json: bool, config_path: &Path) -
 
     match verb.as_str() {
         "status" => status(device, json, config_path),
-        "start" => start(device, rest, json, config_path),
+        // `on`/`stop` read more naturally to some hands than
+        // `start`/`off`; both spellings do the same thing.
+        "start" | "on" => start(device, rest, json, config_path),
         "set" => set(device, rest, json, config_path),
-        "off" => off(device, json, config_path),
+        "off" | "stop" => off(device, json, config_path),
         "watch" => watch(device, json, config_path),
         other => Err(AppError::Usage(format!(
-            "unknown kettle action '{other}'; try status, start, set, off, or watch"
+            "unknown kettle action '{other}'; try status, start (on), set, off (stop), or watch"
         ))),
     }
 }

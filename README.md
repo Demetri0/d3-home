@@ -97,10 +97,10 @@ d3home alias                  # показать все
 
 ```
 d3home kettle status          # режим, текущая и целевая температура, ошибка
-d3home kettle start           # кипятить до 100
+d3home kettle start           # кипятить до 100 (синоним: on)
 d3home kettle start 80        # до 80
 d3home kettle set 80          # задать цель, не включая нагрев
-d3home kettle off
+d3home kettle off             # остановить (синоним: stop)
 d3home kettle watch           # живая температура до Ctrl-C, переподключается сама
 
 d3home add                    # зарегистрировать устройство

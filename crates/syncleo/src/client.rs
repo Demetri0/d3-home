@@ -51,6 +51,15 @@ pub struct DeviceState {
 }
 
 impl DeviceState {
+    /// Whether this reading is worth showing a person.
+    ///
+    /// Mode and current temperature are what a status is actually about;
+    /// the flags are context. A state carrying only one of the two is
+    /// technically a successful read and practically a shrug.
+    pub fn is_informative(&self) -> bool {
+        self.mode.is_some() && self.current_temperature.is_some()
+    }
+
     fn apply(&mut self, event: Event) {
         match event {
             Event::CurrentTemperature(t) => self.current_temperature = Some(t),
@@ -191,7 +200,18 @@ impl Client {
                 if state == DeviceState::default() {
                     return Err(Error::NoState);
                 }
-                return Ok(state);
+                // Going quiet is only permission to stop once the reading is
+                // worth having. An idle kettle spreads its burst out with
+                // gaps wider than the quiet window, so returning on the first
+                // lull hands back a status that is mostly "unknown" -- true,
+                // and useless. When the essentials are still missing, keep
+                // waiting for the overall deadline instead.
+                let out_of_time = Instant::now() >= overall_deadline;
+                if state.is_informative() || out_of_time {
+                    return Ok(state);
+                }
+                quiet_deadline = None;
+                continue;
             }
 
             let actions = self.pump(remaining)?;

@@ -14,7 +14,7 @@ use crate::config::{Config, RESERVED};
 /// its completions follow, with no change to the shell scripts.
 fn actions_for(driver: &str) -> &'static [&'static str] {
     match driver {
-        "syncleo" => &["status", "start", "set", "off", "watch"],
+        "syncleo" => &["status", "start", "on", "set", "off", "stop", "watch"],
         _ => &[],
     }
 }
@@ -166,7 +166,10 @@ mod tests {
     #[test]
     fn the_current_word_filters_the_candidates() {
         let path = registry(line!());
-        assert_eq!(candidates(&words(&["kettle", "st"]), &path), vec!["start".to_string(), "status".to_string()]);
+        assert_eq!(
+            candidates(&words(&["kettle", "st"]), &path),
+            vec!["start".to_string(), "status".to_string(), "stop".to_string()]
+        );
     }
 
     #[test]
