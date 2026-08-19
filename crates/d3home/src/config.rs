@@ -561,6 +561,16 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         assert!(matches!(parse(&toml), Err(ConfigError::ReservedAlias { .. })));
     }
 
+
+    #[test]
+    fn an_alias_with_a_colon_loads_and_resolves() {
+        // Grouping by room -- `kitchen:kettle`, `bath:heater` -- is the
+        // obvious use for a punctuation character here, and nothing in the
+        // config layer treats a colon specially.
+        let toml = KETTLE.replace(r#"["k", "чайник"]"#, r#"["kitchen:kettle"]"#);
+        let config = parse(&toml).unwrap();
+        assert_eq!(config.resolve("kitchen:kettle").unwrap().name, "kettle");
+    }
     #[test]
     fn refuses_an_empty_alias() {
         let toml = KETTLE.replace(r#"["k", "чайник"]"#, r#"[""]"#);

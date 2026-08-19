@@ -1162,7 +1162,11 @@ fn devices_identifies_each_entry_without_showing_any_of_the_token() {
     let path = dir.join("devices.toml");
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).unwrap();
-    let token = "deadbeefdeadbeefdeadbeefdeadbeef";
+    // Deliberately shares nothing with the MAC below. With both spelled
+    // `deadbeef...`, the "no part of the token appears" assertion passed only
+    // because the MAC is displayed with colons -- it would have started
+    // failing on a formatting change, having caught no leak at all.
+    let token = "cafebabecafebabecafebabecafebabe";
     std::fs::write(
         &path,
         format!(
@@ -1189,4 +1193,50 @@ fn devices_identifies_each_entry_without_showing_any_of_the_token() {
     assert!(!listing.contains(&token[..8]), "part of the token appeared:\n{listing}");
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_alias_may_contain_a_colon() {
+    // `kitchen:kettle` is a natural way to group devices by room once there
+    // is more than one. Nothing in the parser gives a colon special meaning,
+    // and this pins that it stays that way.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    let path = config.to_str().unwrap();
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "alias", "add", "kitchen:kettle", "kettle"])
+        .assert()
+        .success();
+
+    // Usable as a device word...
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "kitchen:kettle", "status"])
+        .assert()
+        .success();
+
+    // ...and behind --device, which takes the same names.
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "--device", "kitchen:kettle", "status"])
+        .assert()
+        .success();
+
+    // ...and it completes, since completion reads the live registry.
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "__complete", "kitchen"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kitchen:kettle"));
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "alias", "rm", "kitchen:kettle"])
+        .assert()
+        .success();
+
+    handle.shutdown();
 }
