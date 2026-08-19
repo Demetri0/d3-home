@@ -15,6 +15,7 @@ pub const RESERVED: &[&str] = &[
     "add",
     "completions",
     "__complete",
+    "daemon",
     "discover",
     "devices",
     "alias",

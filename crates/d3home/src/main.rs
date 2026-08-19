@@ -9,9 +9,6 @@ mod clock;
 mod commands;
 mod config;
 mod keys;
-// Nothing calls into this yet -- the daemon that will is the next commit,
-// and the allowance goes away with it.
-#[allow(dead_code)]
 mod notify;
 mod output;
 mod progress;
@@ -91,6 +88,10 @@ fn dispatch(parsed: Parsed, config_path: &Path, json: bool) -> Result<(), AppErr
         Parsed::Builtin(Builtin::Complete { words }) => {
             complete::complete(&words, config_path);
             Ok(())
+        }
+        Parsed::Builtin(Builtin::Daemon) => {
+            let config = Config::load(config_path)?;
+            commands::daemon::run(&config, config_path)
         }
         Parsed::Builtin(Builtin::Discover) => registry::discover(config_path, json),
         Parsed::Builtin(Builtin::Devices) => {

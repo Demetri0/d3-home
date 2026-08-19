@@ -296,7 +296,7 @@ fn trace(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError
 
 /// Hold a session open and feed everything it reports to `sink`, reconnecting
 /// for as long as the failures are ones that reconnecting can fix.
-fn stream(
+pub(crate) fn stream(
     device: &Device,
     config_path: &Path,
     sink: &mut dyn output::EventSink,
@@ -339,6 +339,7 @@ fn stream(
         output::print_warning(&format!(
             "kettle went away ({err}); waiting for it to come back"
         ));
+        sink.disconnected();
         // Finding 8: `connect_with` returns the `Cached` endpoint that
         // actually worked -- whether that was the one already cached or
         // one just found by discovery -- specifically so this can be

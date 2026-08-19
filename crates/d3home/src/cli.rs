@@ -48,6 +48,8 @@ pub enum Builtin {
     Complete {
         words: Vec<String>,
     },
+    /// Watch the configured devices and notify when something happens.
+    Daemon,
     Discover,
     Devices,
     AliasAdd {
@@ -178,6 +180,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, UsageError> {
         "__complete" => Ok(Parsed::Builtin(Builtin::Complete {
             words: rest.to_vec(),
         })),
+        "daemon" => Ok(Parsed::Builtin(Builtin::Daemon)),
         "discover" => Ok(Parsed::Builtin(Builtin::Discover)),
         "devices" => Ok(Parsed::Builtin(Builtin::Devices)),
         "help" => Ok(Parsed::Builtin(Builtin::Help)),

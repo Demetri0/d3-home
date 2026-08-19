@@ -1,9 +1,14 @@
 //! `d3home daemon`: watch the configured devices and say when something
 //! happens.
 
+use std::path::Path;
+
 use syncleo::codec::command::{Event, PowerMode};
 
-use crate::notify::Notification;
+use crate::cli::AppError;
+use crate::config::Config;
+use crate::notify::{Notification, Notifier};
+use crate::output::EventSink;
 
 /// Every event a notification can be asked for.
 pub const EVENTS: &[&str] = &["boiled", "error", "started", "stopped", "offline", "online"];
@@ -137,6 +142,108 @@ impl Watcher {
     }
 }
 
+/// The daemon's `EventSink`: the same seam `watch` and `trace` plug into,
+/// except that it notifies instead of drawing.
+pub struct NotifySink {
+    watcher: Watcher,
+    deliver: Box<dyn FnMut(&Notification) + Send>,
+}
+
+impl NotifySink {
+    pub fn new(watcher: Watcher, deliver: Box<dyn FnMut(&Notification) + Send>) -> Self {
+        Self { watcher, deliver }
+    }
+}
+
+impl EventSink for NotifySink {
+    fn event(&mut self, event: &Event) -> std::io::Result<()> {
+        if let Some(notification) = self.watcher.observe(event) {
+            (self.deliver)(&notification);
+        }
+        // Never an error: returning one would stop the stream, and missing a
+        // popup must not cost the connection.
+        Ok(())
+    }
+
+    fn disconnected(&mut self) {
+        if let Some(notification) = self.watcher.disconnected() {
+            (self.deliver)(&notification);
+        }
+    }
+
+    fn reconnected(&mut self) -> std::io::Result<()> {
+        if let Some(notification) = self.watcher.reconnected() {
+            (self.deliver)(&notification);
+        }
+        Ok(())
+    }
+}
+
+/// Watch every configured device until stopped.
+pub fn run(config: &Config, config_path: &Path) -> Result<(), AppError> {
+    let wanted: Vec<String> = config.daemon.notify.on.clone();
+    let notifier = std::sync::Arc::new(Notifier::new(config.daemon.notify.command.clone()));
+
+    let devices: Vec<_> = match &config.daemon.devices {
+        Some(names) => names
+            .iter()
+            .filter_map(|n| config.resolve(n).cloned())
+            .collect(),
+        None => config.devices.clone(),
+    };
+    if devices.is_empty() {
+        return Err(AppError::Usage("no devices configured to watch".into()));
+    }
+
+    // On stderr, not stdout: this is the daemon telling somebody what it is
+    // doing, which belongs with the diagnostics the supervisor collects.
+    eprintln!(
+        "d3home: watching {} via {}",
+        devices
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        notifier.describe()
+    );
+
+    // One thread per device: `stream` blocks for the life of a session.
+    let mut threads = Vec::new();
+    for device in devices {
+        let wanted = wanted.clone();
+        let notifier = notifier.clone();
+        let config_path = config_path.to_path_buf();
+        threads.push(std::thread::spawn(move || {
+            let watcher = Watcher::new(device.name.clone(), wanted);
+            let notifier_for_sink = notifier.clone();
+            let mut sink = NotifySink::new(
+                watcher,
+                Box::new(move |n: &Notification| notifier_for_sink.deliver(n)),
+            );
+            let result = crate::commands::kettle::stream(&device, &config_path, &mut sink);
+            if let Err(err) = &result {
+                eprintln!("d3home: stopped watching '{}': {err}", device.name);
+            }
+            result
+        }));
+    }
+
+    // If every device has stopped, exit non-zero so the supervisor reports a
+    // failed unit rather than a running process doing nothing.
+    let mut last_error = None;
+    for thread in threads {
+        match thread.join() {
+            Ok(Err(err)) => last_error = Some(err),
+            Ok(Ok(())) => {}
+            Err(_) => last_error = Some(AppError::Internal("a watcher thread panicked".into())),
+        }
+    }
+    match last_error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +260,38 @@ mod tests {
         w.observe(&Event::TargetTemperature(target));
         w.observe(&Event::Mode(PowerMode::Custom));
         w.observe(&Event::CurrentTemperature(from));
+    }
+
+    #[test]
+    fn a_sink_turns_recognised_moments_into_deliveries() {
+        // The sink is the only part that touches both halves, so this is
+        // where a notification recognised but never delivered would show up.
+        let delivered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = delivered.clone();
+        let mut sink = NotifySink::new(
+            Watcher::new("kettle".into(), vec!["boiled".into()]),
+            Box::new(move |n: &Notification| seen.lock().unwrap().push(n.event)),
+        );
+
+        sink.event(&Event::TargetTemperature(80)).unwrap();
+        sink.event(&Event::Mode(PowerMode::Custom)).unwrap();
+        sink.event(&Event::CurrentTemperature(40)).unwrap();
+        sink.event(&Event::CurrentTemperature(79)).unwrap();
+        sink.event(&Event::Mode(PowerMode::Off)).unwrap();
+
+        assert_eq!(*delivered.lock().unwrap(), vec!["boiled"]);
+    }
+
+    #[test]
+    fn a_sink_never_fails_the_stream() {
+        // Returning an error would stop `stream` and end the watch. Missing
+        // a popup must not cost the connection.
+        let mut sink = NotifySink::new(
+            Watcher::new("kettle".into(), vec!["boiled".into()]),
+            Box::new(|_: &Notification| {}),
+        );
+        assert!(sink.event(&Event::Ping).is_ok());
+        assert!(sink.reconnected().is_ok());
     }
 
     #[test]
@@ -303,13 +442,54 @@ mod tests {
     #[test]
     fn every_advertised_event_name_can_actually_fire() {
         // A name in EVENTS that nothing produces would be a lie in the
-        // config's documentation.
-        assert!(EVENTS.iter().all(|e| !e.is_empty()));
+        // config's documentation: somebody would ask for it and wait
+        // forever. So drive the watcher and collect what really comes out.
+        let all: Vec<&str> = EVENTS.to_vec();
+        let mut fired: Vec<&str> = Vec::new();
+
+        let mut w = watcher(&all);
+        w.observe(&Event::Mode(PowerMode::Off));
+        w.observe(&Event::TargetTemperature(100));
+        fired.extend(w.observe(&Event::Mode(PowerMode::On)).map(|n| n.event));
+        w.observe(&Event::CurrentTemperature(98));
+        fired.extend(w.observe(&Event::Mode(PowerMode::Off)).map(|n| n.event));
+        w.observe(&Event::Error(false));
+        fired.extend(w.observe(&Event::Error(true)).map(|n| n.event));
+        fired.extend(w.disconnected().map(|n| n.event));
+        fired.extend(w.reconnected().map(|n| n.event));
+
+        // `stopped` and `boiled` are the two ways one heat can end, so the
+        // second reading has to come from a second run.
+        let mut early = watcher(&all);
+        early.observe(&Event::Mode(PowerMode::Off));
+        early.observe(&Event::TargetTemperature(100));
+        early.observe(&Event::Mode(PowerMode::On));
+        early.observe(&Event::CurrentTemperature(60));
+        fired.extend(early.observe(&Event::Mode(PowerMode::Off)).map(|n| n.event));
+
+        for name in EVENTS {
+            assert!(fired.contains(name), "nothing ever produces '{name}'");
+        }
         for name in DEFAULT_EVENTS {
             assert!(
                 EVENTS.contains(name),
                 "{name} is a default but not a known event"
             );
         }
+    }
+
+    #[test]
+    fn a_sink_reports_the_device_going_away() {
+        // `offline` reaches the watcher only through the sink's own hook,
+        // so a sink that ignored it would leave the name unreachable.
+        let delivered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = delivered.clone();
+        let mut sink = NotifySink::new(
+            Watcher::new("kettle".into(), vec!["offline".into()]),
+            Box::new(move |n: &Notification| seen.lock().unwrap().push(n.event)),
+        );
+
+        EventSink::disconnected(&mut sink);
+        assert_eq!(*delivered.lock().unwrap(), vec!["offline"]);
     }
 }

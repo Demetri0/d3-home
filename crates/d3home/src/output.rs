@@ -768,6 +768,10 @@ pub trait EventSink {
     /// screen straight away.
     fn start(&mut self) {}
     fn event(&mut self, event: &Event) -> std::io::Result<()>;
+    /// Called when the connection is lost, before the wait to get it back.
+    /// A view that only draws has nothing to do here; a sink that reports
+    /// the device going away does.
+    fn disconnected(&mut self) {}
     fn reconnected(&mut self) -> std::io::Result<()>;
     /// Called when the stream ends, to tidy anything left mid-line.
     fn finish(&mut self) {}

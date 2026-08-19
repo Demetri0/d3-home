@@ -1420,3 +1420,49 @@ fn an_alias_may_contain_a_colon() {
 
     handle.shutdown();
 }
+
+#[test]
+fn the_daemon_refuses_a_config_it_cannot_act_on() {
+    // It must fail at startup rather than run silently doing nothing.
+    let dir =
+        std::env::temp_dir().join(format!("d3home-daemon-{}-{}", std::process::id(), line!()));
+    let path = dir.join("devices.toml");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        &path,
+        "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"deadbeefdead\"\n\
+         token = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n\n[daemon.notify]\non = [\"boilded\"]\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path.to_str().unwrap(), "daemon"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("boilded"));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn help_and_completion_both_know_about_the_daemon() {
+    let out = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["help"])
+        .assert()
+        .success();
+    let help = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(
+        help.contains("daemon"),
+        "help never mentions the daemon:\n{help}"
+    );
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["__complete", "dae"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("daemon"));
+}
