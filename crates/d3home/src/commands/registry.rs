@@ -133,6 +133,7 @@ pub fn help_text() -> String {
     out.push_str("    devices             list what is configured\n");
     out.push_str("    alias add <a> <d>   give device <d> the alias <a>\n");
     out.push_str("    alias rm <a>        remove alias <a>\n");
+    out.push_str("    completions <shell> print a completion script for bash, zsh or fish\n");
     out.push_str("    help                this text\n\n");
     out.push_str("OPTIONS (accepted in any position):\n");
     out.push_str("    --json              machine-readable output\n");

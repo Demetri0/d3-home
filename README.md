@@ -104,6 +104,7 @@ d3home kettle off
 d3home kettle watch           # живая температура до Ctrl-C, переподключается сама
 
 d3home add                    # зарегистрировать устройство
+d3home completions fish       # скрипт автодополнения
 d3home discover               # что видно в сети
 d3home devices                # что настроено
 ```
@@ -182,6 +183,23 @@ sudo firewall-cmd --permanent --add-service=mdns  # насовсем
 
 Если mDNS в сети недоступен принципиально, `[devices.cached]` можно заполнить
 руками — `d3home discover` печатает публичный ключ именно для этого.
+
+## Автодополнение
+
+```
+d3home completions fish > ~/.config/fish/completions/d3home.fish
+d3home completions bash > ~/.local/share/bash-completion/completions/d3home
+d3home completions zsh  > ~/.zsh/completions/_d3home    # каталог должен быть в fpath
+```
+
+Дополняются не только встроенные команды, но и **имена твоих устройств вместе с
+алиасами** — они берутся из конфига в момент нажатия Tab, а не зашиты в скрипт.
+Поэтому после `d3home alias add k kettle` дополнение узнает `k` сразу, без
+перегенерации. Действия подсказываются по драйверу устройства, так что новый тип
+устройства принесёт свои действия сам.
+
+Если конфига нет или он сломан, дополнение всё равно предложит встроенные
+команды — сломанный конфиг не должен ощущаться как сломанный шелл.
 
 ## Коды возврата
 

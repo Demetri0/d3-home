@@ -2,5 +2,6 @@
 //! device-agnostic built-ins (`registry`).
 
 pub mod add;
+pub mod complete;
 pub mod kettle;
 pub mod registry;

@@ -12,7 +12,7 @@ mod progress;
 use std::path::Path;
 
 use cli::{AppError, Builtin, ExitCode, Parsed};
-use commands::{add, kettle, registry};
+use commands::{add, complete, kettle, registry};
 use config::{Config, ConfigError};
 
 fn main() {
@@ -67,6 +67,11 @@ fn dispatch(parsed: Parsed, config_path: &Path, json: bool) -> Result<(), AppErr
             }
             let device = add::resolve(request, prompt)?;
             add::write(config_path, device)
+        }
+        Parsed::Builtin(Builtin::Completions { shell }) => complete::script(&shell),
+        Parsed::Builtin(Builtin::Complete { words }) => {
+            complete::complete(&words, config_path);
+            Ok(())
         }
         Parsed::Builtin(Builtin::Discover) => registry::discover(config_path, json),
         Parsed::Builtin(Builtin::Devices) => {

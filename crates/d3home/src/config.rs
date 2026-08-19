@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Built-in subcommands that a device alias must never shadow.
-pub const RESERVED: &[&str] = &["add", "discover", "devices", "alias", "help"];
+pub const RESERVED: &[&str] =
+    &["add", "completions", "__complete", "discover", "devices", "alias", "help"];
 
 /// Hex-encode `bytes` in lowercase -- the same representation the config
 /// file's `token` and `public_key` fields, and mDNS's `public` TXT record,

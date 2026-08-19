@@ -36,6 +36,11 @@ pub enum ExitCode {
 pub enum Builtin {
     /// Register a device: from a share link, from prompts, or from flags.
     Add { args: Vec<String> },
+    /// Print a shell's completion script.
+    Completions { shell: String },
+    /// Answer the completion script's question. Hidden: it exists for the
+    /// shell, not for a person, so it is kept out of the help text.
+    Complete { words: Vec<String> },
     Discover,
     Devices,
     AliasAdd { alias: String, device: String },
@@ -141,6 +146,11 @@ pub fn parse(args: &[String]) -> Result<Parsed, UsageError> {
 
     match head.as_str() {
         "add" => Ok(Parsed::Builtin(Builtin::Add { args: rest.to_vec() })),
+        "completions" => match rest {
+            [shell] => Ok(Parsed::Builtin(Builtin::Completions { shell: shell.clone() })),
+            _ => Err(UsageError("usage: d3home completions <bash|zsh|fish>".into())),
+        },
+        "__complete" => Ok(Parsed::Builtin(Builtin::Complete { words: rest.to_vec() })),
         "discover" => Ok(Parsed::Builtin(Builtin::Discover)),
         "devices" => Ok(Parsed::Builtin(Builtin::Devices)),
         "help" => Ok(Parsed::Builtin(Builtin::Help)),
