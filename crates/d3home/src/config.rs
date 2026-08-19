@@ -90,6 +90,54 @@ pub(crate) fn normalize_mac(mac: &str) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub devices: Vec<Device>,
+    /// Skipped on save while it holds nothing but defaults, so registering a
+    /// device does not silently write a settings section into the config of
+    /// somebody who never asked for a daemon.
+    #[serde(default, skip_serializing_if = "DaemonConfig::is_default")]
+    pub daemon: DaemonConfig,
+}
+
+/// How the daemon should behave. Every part is optional: a config with no
+/// `[daemon]` section is the config everybody already has.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonConfig {
+    /// Which devices to watch. `None` means all of them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub devices: Option<Vec<String>>,
+    #[serde(default)]
+    pub notify: NotifyConfig,
+}
+
+impl DaemonConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotifyConfig {
+    /// Which events deserve a notification.
+    #[serde(default = "default_events")]
+    pub on: Vec<String>,
+    /// A command to run instead of the built-in notifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            on: default_events(),
+            command: None,
+        }
+    }
+}
+
+fn default_events() -> Vec<String> {
+    crate::commands::daemon::DEFAULT_EVENTS
+        .iter()
+        .map(|e| e.to_string())
+        .collect()
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -184,6 +232,15 @@ pub enum ConfigError {
 
     #[error("device '{device}' has a malformed token")]
     BadToken { device: String },
+
+    #[error("'{name}' is not an event d3home knows about; try one of: {known}")]
+    UnknownEvent { name: String, known: String },
+
+    #[error("the daemon is told to watch '{name}', which is not a configured device")]
+    UnknownDaemonDevice { name: String },
+
+    #[error("the daemon is told to watch nothing at all; remove `devices` to watch everything")]
+    NothingToWatch,
 
     #[error("no device matches '{name}'")]
     UnknownDevice { name: String },
@@ -283,6 +340,28 @@ impl Config {
                     });
                 }
                 owners.insert(alias.as_str(), device.name.as_str());
+            }
+        }
+
+        for name in &self.daemon.notify.on {
+            // A typo here would otherwise mean waiting for a notification
+            // that was never going to come, with nothing to diagnose.
+            if !crate::commands::daemon::EVENTS.contains(&name.as_str()) {
+                return Err(ConfigError::UnknownEvent {
+                    name: name.clone(),
+                    known: crate::commands::daemon::EVENTS.join(", "),
+                });
+            }
+        }
+
+        if let Some(devices) = &self.daemon.devices {
+            if devices.is_empty() {
+                return Err(ConfigError::NothingToWatch);
+            }
+            for name in devices {
+                if self.resolve(name).is_none() {
+                    return Err(ConfigError::UnknownDaemonDevice { name: name.clone() });
+                }
             }
         }
 
@@ -515,6 +594,90 @@ driver = "syncleo"
 mac = "deadbeefdead"
 token = "deadbeefdeadbeefdeadbeefdeadbeef"
 "#;
+
+    #[test]
+    fn a_config_without_a_daemon_section_still_has_defaults() {
+        // Every config in existence predates this feature.
+        let config = parse(KETTLE).unwrap();
+        assert_eq!(
+            config.daemon.notify.on,
+            vec!["boiled".to_string(), "error".to_string()]
+        );
+        assert!(
+            config.daemon.devices.is_none(),
+            "none means watch everything"
+        );
+        assert!(config.daemon.notify.command.is_none());
+    }
+
+    #[test]
+    fn the_daemon_section_is_read_when_present() {
+        let toml = format!(
+            "{KETTLE}\n[daemon]\ndevices = [\"kettle\"]\n\n\
+             [daemon.notify]\non = [\"boiled\", \"started\"]\ncommand = \"ntfy publish x\"\n"
+        );
+        let config = parse(&toml).unwrap();
+        assert_eq!(
+            config.daemon.devices.as_deref(),
+            Some(&["kettle".to_string()][..])
+        );
+        assert_eq!(
+            config.daemon.notify.on,
+            vec!["boiled".to_string(), "started".to_string()]
+        );
+        assert_eq!(
+            config.daemon.notify.command.as_deref(),
+            Some("ntfy publish x")
+        );
+    }
+
+    #[test]
+    fn an_event_name_that_does_not_exist_is_refused_at_load() {
+        // Silently ignoring it would mean waiting for a notification that
+        // was never going to come, with nothing to diagnose.
+        let toml = format!("{KETTLE}\n[daemon.notify]\non = [\"boilded\"]\n");
+        let err = parse(&toml).unwrap_err().to_string();
+        assert!(
+            err.contains("boilded"),
+            "the error must name the typo: {err}"
+        );
+    }
+
+    #[test]
+    fn a_daemon_device_that_is_not_configured_is_refused_at_load() {
+        let toml = format!("{KETTLE}\n[daemon]\ndevices = [\"teapot\"]\n");
+        let err = parse(&toml).unwrap_err().to_string();
+        assert!(err.contains("teapot"), "the error must name it: {err}");
+    }
+
+    #[test]
+    fn an_empty_watch_list_is_refused_rather_than_silently_idle() {
+        let toml = format!("{KETTLE}\n[daemon]\ndevices = []\n");
+        assert!(
+            parse(&toml).is_err(),
+            "a daemon with nothing to watch is a mistake"
+        );
+    }
+
+    #[test]
+    fn a_daemon_device_may_be_named_by_its_alias() {
+        // `resolve` accepts an alias everywhere else; the daemon's list must
+        // not be the one place where the alias is rejected.
+        let toml = format!("{KETTLE}\n[daemon]\ndevices = [\"k\"]\n");
+        assert!(parse(&toml).is_ok());
+    }
+
+    #[test]
+    fn saving_a_config_does_not_invent_a_daemon_section() {
+        // Registering a device must not rewrite somebody's config with
+        // settings for a daemon they have never run.
+        let config = parse(KETTLE).unwrap();
+        let written = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            !written.contains("[daemon]"),
+            "defaults leaked into the file: {written}"
+        );
+    }
 
     #[test]
     fn resolves_a_device_by_name_or_alias() {
