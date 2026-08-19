@@ -12,7 +12,7 @@ mod progress;
 use std::path::Path;
 
 use cli::{AppError, Builtin, ExitCode, Parsed};
-use commands::{kettle, registry};
+use commands::{add, kettle, registry};
 use config::{Config, ConfigError};
 
 fn main() {
@@ -57,6 +57,17 @@ fn run(argv: &[String]) -> Result<(), AppError> {
 /// the driver.
 fn dispatch(parsed: Parsed, config_path: &Path, json: bool) -> Result<(), AppError> {
     match parsed {
+        Parsed::Builtin(Builtin::Add { args }) => {
+            let mut request = add::parse_args(&args)?;
+            let prompt = add::can_prompt();
+            // Look around the network before asking anyone to type a MAC by
+            // hand -- the device they want is usually sitting right there.
+            if prompt && request.mac.is_none() {
+                request.mac = add::pick_discovered();
+            }
+            let device = add::resolve(request, prompt)?;
+            add::write(config_path, device)
+        }
         Parsed::Builtin(Builtin::Discover) => registry::discover(config_path, json),
         Parsed::Builtin(Builtin::Devices) => {
             let config = Config::load(config_path)?;

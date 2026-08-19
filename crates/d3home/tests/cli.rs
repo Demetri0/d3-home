@@ -895,3 +895,92 @@ fn start_reports_what_the_kettle_agreed_to_do() {
 
     handle.shutdown();
 }
+
+#[test]
+fn add_creates_the_registry_when_there_is_none_yet() {
+    // The first device is exactly when the file is meant to appear, so a
+    // new user should never have to hand-write TOML to get started.
+    let dir = std::env::temp_dir().join(format!("d3home-add-{}-{}", std::process::id(), line!()));
+    let path = dir.join("nested").join("devices.toml");
+    std::fs::remove_dir_all(&dir).ok();
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "add",
+            "https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=0123456789abcdef0123456789abcdef&name=PWK%201725CGLD",
+            "--name",
+            "kettle",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kettle"));
+
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "the registry holds a token");
+    let dir_mode = std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode();
+    assert_eq!(dir_mode & 0o777, 0o700, "so should the directory we created for it");
+
+    // And it is immediately usable, with the model carried over from the link.
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path.to_str().unwrap(), "devices"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kettle"));
+
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("PWK 1725CGLD"), "model lost:\n{written}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn add_refuses_a_second_device_with_the_same_name() {
+    let dir = std::env::temp_dir().join(format!("d3home-add-{}-{}", std::process::id(), line!()));
+    let path = dir.join("devices.toml");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let args = [
+        "--config",
+        path.to_str().unwrap(),
+        "add",
+        "--name",
+        "kettle",
+        "--mac",
+        "aabbccddeeff",
+        "--token",
+        "0123456789abcdef0123456789abcdef",
+    ];
+
+    Command::cargo_bin("d3home").unwrap().args(args).assert().success();
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(args)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("already configured"));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn add_with_nothing_to_go_on_and_no_terminal_says_what_is_missing() {
+    // Under a test harness there is no tty, so this is the scripted path:
+    // it must complain precisely rather than hang waiting for input.
+    let dir = std::env::temp_dir().join(format!("d3home-add-{}-{}", std::process::id(), line!()));
+    let path = dir.join("devices.toml");
+    std::fs::remove_dir_all(&dir).ok();
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path.to_str().unwrap(), "add"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("share link"));
+
+    std::fs::remove_dir_all(&dir).ok();
+}

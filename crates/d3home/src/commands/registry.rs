@@ -126,6 +126,9 @@ pub fn help_text() -> String {
     out.push_str("    watch               stream events until interrupted; reconnects\n");
     out.push_str("                        by itself when the kettle is put back\n\n");
     out.push_str("BUILTINS:\n");
+    out.push_str("    add [link]          register a device: paste the share link from\n");
+    out.push_str("                        the vendor app, or answer prompts, or pass\n");
+    out.push_str("                        --name/--mac/--token\n");
     out.push_str("    discover            find devices on the local network\n");
     out.push_str("    devices             list what is configured\n");
     out.push_str("    alias add <a> <d>   give device <d> the alias <a>\n");

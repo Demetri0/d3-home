@@ -71,6 +71,13 @@ pub fn run(device: &Device, action: &[String], json: bool, config_path: &Path) -
         .split_first()
         .ok_or_else(|| AppError::Usage("missing action; try status, start, set, off, or watch".into()))?;
 
+    // No kettle action takes an option of its own, so anything option-shaped
+    // that survived global parsing is a typo -- and a typo silently read as
+    // a temperature or ignored is worse than a refusal.
+    if let Some(bad) = rest.iter().find(|w| w.starts_with("--")) {
+        return Err(AppError::Usage(format!("unknown option '{bad}'; try 'd3home help'")));
+    }
+
     match verb.as_str() {
         "status" => status(device, json, config_path),
         "start" => start(device, rest, json, config_path),

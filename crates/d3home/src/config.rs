@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Built-in subcommands that a device alias must never shadow.
-pub const RESERVED: &[&str] = &["discover", "devices", "alias", "help"];
+pub const RESERVED: &[&str] = &["add", "discover", "devices", "alias", "help"];
 
 /// Hex-encode `bytes` in lowercase -- the same representation the config
 /// file's `token` and `public_key` fields, and mDNS's `public` TXT record,
@@ -76,7 +76,7 @@ pub(crate) fn normalize_mac(mac: &str) -> String {
     mac.chars().filter(|c| *c != ':' && *c != '-').map(|c| c.to_ascii_lowercase()).collect()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub devices: Vec<Device>,
 }
@@ -296,7 +296,16 @@ impl Config {
     /// never observes a half-written config either.
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        // Only tighten a directory we are creating ourselves. Chmod-ing one
+        // the user already had would be an unpleasant surprise; leaving one
+        // we just made world-traversable, with a token inside it, would be
+        // worse.
+        let existed = parent.exists();
         std::fs::create_dir_all(parent)?;
+        if !existed {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
 
         let text = toml::to_string_pretty(self).map_err(|e| ConfigError::Parse(e.to_string()))?;
 

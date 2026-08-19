@@ -34,6 +34,8 @@ pub enum ExitCode {
 /// A built-in subcommand: one of the words in [`RESERVED`], fully parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Builtin {
+    /// Register a device: from a share link, from prompts, or from flags.
+    Add { args: Vec<String> },
     Discover,
     Devices,
     AliasAdd { alias: String, device: String },
@@ -80,10 +82,13 @@ pub struct Globals {
 /// them alongside the words that remain.
 ///
 /// A bare `--` stops option processing, so a device or alias whose name
-/// begins with a dash is still reachable. An unrecognised `--flag` is an
-/// error rather than a word: silently treating `--jsno` as a device name
-/// would send the user hunting through their config for a device they never
-/// created.
+/// begins with a dash is still reachable.
+///
+/// An option this function does not know is passed through as a word rather
+/// than rejected: subcommands have their own options (`add --token`, say),
+/// and only they know which are valid. Each command is responsible for
+/// refusing an option it does not recognise, so a typo like `--jsno` still
+/// fails loudly -- just one layer further in.
 pub fn split_globals(argv: &[String]) -> Result<(Globals, Vec<String>), UsageError> {
     let mut globals = Globals::default();
     let mut words = Vec::new();
@@ -115,9 +120,6 @@ pub fn split_globals(argv: &[String]) -> Result<(Globals, Vec<String>), UsageErr
             "--help" | "-h" => globals.help = true,
             "--config" => globals.config = Some(take_value("--config")?.into()),
             "--device" => globals.device = Some(take_value("--device")?),
-            other if other.starts_with("--") => {
-                return Err(UsageError(format!("unknown option '{other}'; try 'd3home help'")));
-            }
             _ => words.push(arg.clone()),
         }
     }
@@ -138,6 +140,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, UsageError> {
     }
 
     match head.as_str() {
+        "add" => Ok(Parsed::Builtin(Builtin::Add { args: rest.to_vec() })),
         "discover" => Ok(Parsed::Builtin(Builtin::Discover)),
         "devices" => Ok(Parsed::Builtin(Builtin::Devices)),
         "help" => Ok(Parsed::Builtin(Builtin::Help)),
@@ -340,11 +343,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_option_is_refused_rather_than_taken_for_a_device() {
-        // Treating `--jsno` as a device name would send the user hunting
-        // through their config for something they never created.
-        let err = split_globals(&words(&["kettle", "status", "--jsno"])).unwrap_err();
-        assert!(err.to_string().contains("--jsno"), "got: {err}");
+    fn an_option_this_layer_does_not_know_is_left_for_the_command() {
+        // `add --token` is a real option; only the command knows that. The
+        // typo case is caught one layer in, where the command rejects it.
+        let (globals, rest) = split_globals(&words(&["add", "--token", "abc"])).unwrap();
+        assert!(!globals.json);
+        assert_eq!(rest, words(&["add", "--token", "abc"]));
     }
 
     #[test]
