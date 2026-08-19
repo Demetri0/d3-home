@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 keywords = ["cli", "polaris", "kettle", "smart-home", "iot"]
 categories = ["command-line-utilities", "network-programming"]
 readme = "../../README.md"
-# repository = "https://…"   # fill in once the remote exists
+repository = "https://github.com/Demetri0/d3-home"
 
 [dependencies]
 dialoguer = { version = "0.12.0", default-features = false, features = ["password"] }

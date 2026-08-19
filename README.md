@@ -45,7 +45,7 @@ Working and in daily use, but young, and honest about its limits:
 Rust 1.85 or newer (the crates use edition 2024).
 
 ```
-git clone <this repository>
+git clone https://github.com/Demetri0/d3-home
 cd d3-home
 cargo install --path crates/d3home
 ```
