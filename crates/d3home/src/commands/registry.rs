@@ -155,7 +155,7 @@ mod tests {
     use std::net::Ipv4Addr;
 
     fn sample_kettle_toml() -> String {
-        "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"a0a1a2a3a4a5a6a7a8a9aaabacadaeaf\"\n".into()
+        "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n".into()
     }
 
     fn found(mac: &str) -> Found {

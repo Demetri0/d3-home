@@ -6,7 +6,7 @@ use syncleo::session::{Action, Input, LostReason, Millis, Session};
 
 const OUR_PRIVATE: [u8; 32] = [7; 32];
 const DEVICE_PRIVATE: [u8; 32] = [9; 32];
-const TOKEN: [u8; 16] = [0xA0; 16];
+const TOKEN: [u8; 16] = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
 
 /// Keys as the device sees them: same secret, roles swapped.
 fn device_keys() -> SessionKeys {

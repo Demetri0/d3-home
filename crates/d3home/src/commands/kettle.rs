@@ -1001,7 +1001,7 @@ mod tests {
             .join(format!("d3home-test-cache-endpoint-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
-        std::fs::write(&path, sample_kettle_toml("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")).unwrap();
+        std::fs::write(&path, sample_kettle_toml("deadbeefdeadbeefdeadbeefdeadbeef")).unwrap();
 
         let public_wire = [0x77u8; 32];
         try_cache_endpoint(&path, "kettle", "192.168.1.42".parse().unwrap(), 8888, public_wire, None)
@@ -1027,7 +1027,7 @@ mod tests {
             .join(format!("d3home-test-cache-endpoint-interface-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
-        std::fs::write(&path, sample_kettle_toml("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")).unwrap();
+        std::fs::write(&path, sample_kettle_toml("deadbeefdeadbeefdeadbeefdeadbeef")).unwrap();
 
         try_cache_endpoint(
             &path,
@@ -1052,7 +1052,7 @@ mod tests {
             .join(format!("d3home-test-cache-endpoint-unknown-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
-        std::fs::write(&path, sample_kettle_toml("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")).unwrap();
+        std::fs::write(&path, sample_kettle_toml("deadbeefdeadbeefdeadbeefdeadbeef")).unwrap();
 
         let result = try_cache_endpoint(
             &path,

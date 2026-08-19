@@ -5,7 +5,7 @@ use syncleo::simulator::KettleSimulator;
 use syncleo::transport::UdpTransport;
 
 const OUR_PRIVATE: [u8; 32] = [11; 32];
-const TOKEN: [u8; 16] = [0xA0; 16];
+const TOKEN: [u8; 16] = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
 
 fn connect(handle: &syncleo::simulator::KettleHandle, token: [u8; 16]) -> Result<Client, syncleo::Error> {
     let transport = UdpTransport::connect(handle.addr).unwrap();

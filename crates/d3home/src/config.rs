@@ -493,7 +493,7 @@ name = "kettle"
 aliases = ["k", "чайник"]
 driver = "syncleo"
 mac = "aabbccddeeff"
-token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+token = "deadbeefdeadbeefdeadbeefdeadbeef"
 "#;
 
     #[test]
@@ -581,7 +581,7 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
     #[test]
     fn refuses_the_same_alias_on_two_devices() {
         let toml = format!(
-            "{KETTLE}\n[[devices]]\nname = \"other\"\naliases = [\"k\"]\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"a0a1a2a3a4a5a6a7a8a9aaabacadaeaf\"\n"
+            "{KETTLE}\n[[devices]]\nname = \"other\"\naliases = [\"k\"]\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n"
         );
         assert!(matches!(parse(&toml), Err(ConfigError::DuplicateAlias { .. })));
     }
@@ -589,7 +589,7 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
     #[test]
     fn refuses_an_alias_that_shadows_another_device_name() {
         let toml = format!(
-            "{KETTLE}\n[[devices]]\nname = \"other\"\naliases = [\"kettle\"]\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"a0a1a2a3a4a5a6a7a8a9aaabacadaeaf\"\n"
+            "{KETTLE}\n[[devices]]\nname = \"other\"\naliases = [\"kettle\"]\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n"
         );
         assert!(matches!(parse(&toml), Err(ConfigError::AliasShadowsDevice { .. })));
     }
@@ -599,7 +599,7 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
         // Otherwise `resolve("kettle")` would silently return whichever
         // device happens to come first in the Vec.
         let toml = format!(
-            "{KETTLE}\n[[devices]]\nname = \"kettle\"\naliases = []\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"a0a1a2a3a4a5a6a7a8a9aaabacadaeaf\"\n"
+            "{KETTLE}\n[[devices]]\nname = \"kettle\"\naliases = []\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n"
         );
         assert!(matches!(parse(&toml), Err(ConfigError::DuplicateDevice { .. })));
     }
@@ -611,11 +611,11 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
     fn parses_the_token_into_sixteen_bytes() {
         let config = parse(KETTLE).unwrap();
         assert_eq!(config.resolve("k").unwrap().token_bytes().unwrap(), [
-            0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
-            0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
+            0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
+            0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
         ]);
 
-        let bad = KETTLE.replace("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf", "nothex");
+        let bad = KETTLE.replace("deadbeefdeadbeefdeadbeefdeadbeef", "nothex");
         assert!(matches!(parse(&bad).unwrap().resolve("k").unwrap().token_bytes(), Err(_)));
     }
 
@@ -630,7 +630,7 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
         assert_eq!(token.len(), 32, "fixture must be exactly 32 bytes to reach the old guard");
         assert_eq!(token.chars().count(), 12, "and clearly not 32 *characters*");
 
-        let toml = KETTLE.replace("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf", token);
+        let toml = KETTLE.replace("deadbeefdeadbeefdeadbeefdeadbeef", token);
         let device = parse(&toml).unwrap().devices.into_iter().next().unwrap();
 
         let err = device.token_bytes().unwrap_err();
@@ -647,7 +647,7 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
         // crate's own validation catches -- exactly the kind of failure
         // where `toml`'s own `Display` would quote the source line
         // containing the token.
-        let token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf";
+        let token = "deadbeefdeadbeefdeadbeefdeadbeef";
         let malformed = KETTLE.replace(&format!("token = \"{token}\""), &format!("token = \"{token}"));
 
         let dir = std::env::temp_dir().join(format!("d3home-test-parse-error-{}", std::process::id()));
@@ -678,7 +678,7 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
         // bytes of surrounding source, possibly the token itself, into the
         // panic message. `line_col` now walks `char_indices` instead, so
         // this must neither panic nor echo the token.
-        let token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf";
+        let token = "deadbeefdeadbeefdeadbeefdeadbeef";
         let toml = format!(
             "[[devices]]\nname = \"kettle\"\naliases = [\"k\", \"чайник\"]\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"{token}\n"
         );

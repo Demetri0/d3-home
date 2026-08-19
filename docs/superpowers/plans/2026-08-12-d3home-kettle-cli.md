@@ -47,7 +47,7 @@
 ```
 INKEY  = 000102030405060708090a0b0c0d0e0f
 OUTKEY = 101112131415161718191a1b1c1d1e1f
-TOKEN  = a0a1a2a3a4a5a6a7a8a9aaabacadaeaf
+TOKEN  = deadbeefdeadbeefdeadbeefdeadbeef
 ```
 
 ## Файловая структура
@@ -989,7 +989,7 @@ fn builds_the_reference_handshake_frame() {
     use syncleo::codec::handshake::handshake_frame;
 
     let our_public: [u8; 32] = core::array::from_fn(|i| i as u8);
-    let token: [u8; 16] = unhex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf").try_into().unwrap();
+    let token: [u8; 16] = unhex("deadbeefdeadbeefdeadbeefdeadbeef").try_into().unwrap();
 
     let frame = handshake_frame(&keys(), 0x01, &our_public, &token);
 
@@ -999,7 +999,7 @@ fn builds_the_reference_handshake_frame() {
             "01013100",
             "00",
             "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-            "3a5eb8fc7284be1035c8c6dc6c30aafa",
+            "a9800a7a73100a3fb0fe32ce2a7d0253",
         )),
     );
 }
@@ -1102,7 +1102,7 @@ use syncleo::session::{Action, Input, LostReason, Millis, Session};
 
 const OUR_PRIVATE: [u8; 32] = [7; 32];
 const DEVICE_PRIVATE: [u8; 32] = [9; 32];
-const TOKEN: [u8; 16] = [0xA0; 16];
+const TOKEN: [u8; 16] = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
 
 /// Keys as the device sees them: same secret, roles swapped.
 fn device_keys() -> SessionKeys {
@@ -1326,7 +1326,7 @@ use syncleo::simulator::KettleSimulator;
 use syncleo::transport::UdpTransport;
 
 const OUR_PRIVATE: [u8; 32] = [11; 32];
-const TOKEN: [u8; 16] = [0xA0; 16];
+const TOKEN: [u8; 16] = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
 
 fn connect(handle: &syncleo::simulator::KettleHandle, token: [u8; 16]) -> Result<Client, syncleo::Error> {
     let transport = UdpTransport::connect(handle.addr).unwrap();
@@ -1615,7 +1615,7 @@ name = "kettle"
 aliases = ["k", "чайник"]
 driver = "syncleo"
 mac = "aabbccddeeff"
-token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+token = "deadbeefdeadbeefdeadbeefdeadbeef"
 "#;
 
     #[test]
@@ -1649,7 +1649,7 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
     #[test]
     fn refuses_the_same_alias_on_two_devices() {
         let toml = format!(
-            "{KETTLE}\n[[devices]]\nname = \"other\"\naliases = [\"k\"]\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"a0a1a2a3a4a5a6a7a8a9aaabacadaeaf\"\n"
+            "{KETTLE}\n[[devices]]\nname = \"other\"\naliases = [\"k\"]\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n"
         );
         assert!(matches!(parse(&toml), Err(ConfigError::DuplicateAlias { .. })));
     }
@@ -1657,7 +1657,7 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
     #[test]
     fn refuses_an_alias_that_shadows_another_device_name() {
         let toml = format!(
-            "{KETTLE}\n[[devices]]\nname = \"other\"\naliases = [\"kettle\"]\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"a0a1a2a3a4a5a6a7a8a9aaabacadaeaf\"\n"
+            "{KETTLE}\n[[devices]]\nname = \"other\"\naliases = [\"kettle\"]\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n"
         );
         assert!(matches!(parse(&toml), Err(ConfigError::AliasShadowsDevice { .. })));
     }
@@ -1670,7 +1670,7 @@ token = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
             0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
         ]);
 
-        let bad = KETTLE.replace("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf", "nothex");
+        let bad = KETTLE.replace("deadbeefdeadbeefdeadbeefdeadbeef", "nothex");
         assert!(matches!(parse(&bad).unwrap().resolve("k").unwrap().token_bytes(), Err(_)));
     }
 
@@ -1784,7 +1784,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-const TOKEN: [u8; 16] = [0xA0; 16];
+const TOKEN: [u8; 16] = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
 
 #[test]
 fn starts_the_kettle_at_a_chosen_temperature() {

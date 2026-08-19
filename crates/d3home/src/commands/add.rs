@@ -279,13 +279,13 @@ fn ask_secret(what: &str) -> Result<String, AppError> {
 mod tests {
     use super::*;
 
-    const LINK: &str = "https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=0123456789abcdef0123456789abcdef&name=PWK%201725CGLD";
+    const LINK: &str = "https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=deadbeefdeadbeefdeadbeefdeadbeef&name=PWK%201725CGLD";
 
     #[test]
     fn reads_a_share_link_from_the_vendor_app() {
         let link = parse_share_link(LINK).unwrap();
         assert_eq!(link.mac, "aabbccddeeff");
-        assert_eq!(link.token, "0123456789abcdef0123456789abcdef");
+        assert_eq!(link.token, "deadbeefdeadbeefdeadbeefdeadbeef");
         assert_eq!(link.model.as_deref(), Some("PWK 1725CGLD"));
     }
 
@@ -319,7 +319,7 @@ mod tests {
         let args: Vec<String> = ["--name", "k", LINK].iter().map(|s| s.to_string()).collect();
         let request = parse_args(&args).unwrap();
         assert_eq!(request.name.as_deref(), Some("k"));
-        assert_eq!(request.token.as_deref(), Some("0123456789abcdef0123456789abcdef"));
+        assert_eq!(request.token.as_deref(), Some("deadbeefdeadbeefdeadbeefdeadbeef"));
     }
 
     #[test]
@@ -354,7 +354,7 @@ mod tests {
             let request = AddRequest {
                 name: Some(name.into()),
                 mac: Some("aabbccddeeff".into()),
-                token: Some("0123456789abcdef0123456789abcdef".into()),
+                token: Some("deadbeefdeadbeefdeadbeefdeadbeef".into()),
                 ..Default::default()
             };
             assert!(resolve(request, false).is_err(), "accepted name {name:?}");

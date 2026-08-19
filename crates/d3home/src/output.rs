@@ -744,7 +744,7 @@ mod tests {
             driver: "syncleo".into(),
             model: Some("PWK 1725CGLD".into()),
             mac: "aabbccddeeff".into(),
-            token: "0123456789abcdef0123456789abcdef".into(),
+            token: "deadbeefdeadbeefdeadbeefdeadbeef".into(),
             cached: None,
         }
     }

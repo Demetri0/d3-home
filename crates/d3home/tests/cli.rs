@@ -77,7 +77,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-const TOKEN: [u8; 16] = [0xA0; 16];
+const TOKEN: [u8; 16] = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
 
 #[test]
 fn starts_the_kettle_at_a_chosen_temperature() {
@@ -930,7 +930,7 @@ fn add_creates_the_registry_when_there_is_none_yet() {
             "--config",
             path.to_str().unwrap(),
             "add",
-            "https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=0123456789abcdef0123456789abcdef&name=PWK%201725CGLD",
+            "https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=deadbeefdeadbeefdeadbeefdeadbeef&name=PWK%201725CGLD",
             "--name",
             "kettle",
         ])
@@ -973,7 +973,7 @@ fn add_refuses_a_second_device_with_the_same_name() {
         "--mac",
         "aabbccddeeff",
         "--token",
-        "0123456789abcdef0123456789abcdef",
+        "deadbeefdeadbeefdeadbeefdeadbeef",
     ];
 
     Command::cargo_bin("d3home").unwrap().args(args).assert().success();
@@ -1113,7 +1113,7 @@ fn add_confirms_itself_in_whichever_shape_was_asked_for() {
         "--mac",
         "aabbccddeeff",
         "--token",
-        "0123456789abcdef0123456789abcdef",
+        "deadbeefdeadbeefdeadbeefdeadbeef",
     ];
     let assert = Command::cargo_bin("d3home").unwrap().args(args).assert().success();
     let value: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();

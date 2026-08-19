@@ -136,7 +136,7 @@ mod tests {
         let path = dir.join("devices.toml");
         std::fs::write(
             &path,
-            "[[devices]]\nname = \"kettle\"\naliases = [\"k\"]\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"0123456789abcdef0123456789abcdef\"\n",
+            "[[devices]]\nname = \"kettle\"\naliases = [\"k\"]\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n",
         )
         .unwrap();
         path
