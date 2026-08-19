@@ -38,7 +38,10 @@ pub fn discover(config_path: &Path, json: bool) -> Result<(), AppError> {
 fn cache_discovered(config_path: &Path, found: &[Found]) -> Result<(), AppError> {
     let mut config = match Config::load(config_path) {
         Ok(config) => config,
-        Err(ConfigError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        // Nothing configured yet is the normal state before the first
+        // device is added; discovery is still useful, it just has no
+        // registry to write its findings into.
+        Err(ConfigError::NoRegistry { .. }) => return Ok(()),
         Err(err) => return Err(err.into()),
     };
 
@@ -99,16 +102,46 @@ pub fn alias_rm(config_path: &Path, alias: &str) -> Result<(), AppError> {
 }
 
 pub fn help() {
-    println!("d3home -- control smart home devices over the local network\n");
-    println!("USAGE:");
-    println!("    d3home [--config <path>] [--json] <device-or-alias> <action> [args...]");
-    println!("    d3home discover");
-    println!("    d3home devices");
-    println!("    d3home alias add <alias> <device>");
-    println!("    d3home alias rm <alias>");
-    println!();
-    println!("Kettle actions: status, start [temperature], off, watch");
+    print!("{}", help_text());
 }
+
+/// The help text, as a string so a test can assert it still mentions every
+/// command that exists. Help drifting out of step with the program is the
+/// usual failure here, and it is silent.
+pub fn help_text() -> String {
+    let mut out = String::new();
+    out.push_str("d3home -- control smart home devices over the local network\n\n");
+    out.push_str("USAGE:\n");
+    out.push_str("    d3home <device-or-alias> <action> [args...]\n");
+    out.push_str("    d3home <builtin> [args...]\n\n");
+    out.push_str("The first word is a device name or any alias you gave it, taken from\n");
+    out.push_str("your config -- so `d3home k start 80` works once `k` is an alias.\n\n");
+    out.push_str("KETTLE ACTIONS:\n");
+    out.push_str("    status              show mode, temperature and flags\n");
+    out.push_str("    start               heat to 100 C\n");
+    out.push_str("    start <temp>        heat to <temp> C\n");
+    out.push_str("    set <temp>          set the target without starting, or retarget\n");
+    out.push_str("                        a heat already running\n");
+    out.push_str("    off                 stop heating\n");
+    out.push_str("    watch               stream events until interrupted; reconnects\n");
+    out.push_str("                        by itself when the kettle is put back\n\n");
+    out.push_str("BUILTINS:\n");
+    out.push_str("    discover            find devices on the local network\n");
+    out.push_str("    devices             list what is configured\n");
+    out.push_str("    alias add <a> <d>   give device <d> the alias <a>\n");
+    out.push_str("    alias rm <a>        remove alias <a>\n");
+    out.push_str("    help                this text\n\n");
+    out.push_str("OPTIONS (accepted in any position):\n");
+    out.push_str("    --json              machine-readable output\n");
+    out.push_str("    --device <name>     device to act on, instead of the first word\n");
+    out.push_str("    --config <path>     device registry to use\n");
+    out.push_str("    -h, --help          this text\n\n");
+    out.push_str("EXIT CODES:\n");
+    out.push_str("    0 ok   1 internal   2 usage   3 not found\n");
+    out.push_str("    4 wrong token   5 timeout   6 device error\n");
+    out
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -734,17 +734,18 @@ fn refuses_to_create_an_alias_that_shadows_a_builtin() {
 
 #[test]
 fn refuses_to_create_an_alias_that_looks_like_a_flag_or_is_empty() {
-    // Finding 12: both of these parse fine and would otherwise sit in the
-    // config forever, permanently unusable -- `--json` because clap
-    // consumes it as the global flag before alias resolution ever runs,
-    // an empty string because it can never be typed as a positional word.
+    // Finding 12: both of these would otherwise sit in the config forever,
+    // permanently unusable -- a flag-shaped alias because it is read as an
+    // option wherever it appears, an empty string because it can never be
+    // typed as a positional word. `--` is what gets a literal `--json`
+    // past option parsing at all, so that is how the validation is reached.
     let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
     let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
     let path = config.to_str().unwrap();
 
     Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", path, "alias", "add", "--json", "kettle"])
+        .args(["--config", path, "alias", "add", "--", "--json", "kettle"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("start with"));
@@ -774,6 +775,123 @@ fn devices_lists_what_is_configured_without_leaking_the_token() {
         .success()
         .stdout(predicate::str::contains("kettle").and(predicate::str::contains("k")))
         .stdout(predicate::str::contains(&hex(&TOKEN)).not());
+
+    handle.shutdown();
+}
+
+#[test]
+fn a_global_flag_after_the_action_is_honoured_end_to_end() {
+    // The motivating bug: `--json` in trailing position was silently
+    // dropped, so a script asking for JSON quietly got human text instead.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    let path = config.to_str().unwrap();
+
+    for args in [
+        vec!["--config", path, "--json", "kettle", "status"],
+        vec!["--config", path, "kettle", "status", "--json"],
+        vec!["kettle", "status", "--json", "--config", path],
+    ] {
+        let out = Command::cargo_bin("d3home")
+            .unwrap()
+            .args(&args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<serde_json::Value>(&out)
+            .unwrap_or_else(|_| panic!("not json for {args:?}: {}", String::from_utf8_lossy(&out)));
+    }
+
+    handle.shutdown();
+}
+
+#[test]
+fn help_lists_every_command_that_exists() {
+    // Help drifting out of step with the program is silent, so pin it.
+    let out = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["help"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let help = String::from_utf8(out).unwrap();
+
+    for word in [
+        "status", "start", "set", "off", "watch", "discover", "devices", "alias", "--json",
+        "--device", "--config",
+    ] {
+        assert!(help.contains(word), "help never mentions {word}:\n{help}");
+    }
+}
+
+#[test]
+fn set_changes_the_target_without_starting_the_kettle() {
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    let before = handle.state().mode;
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap(), "kettle", "set", "60"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("60"));
+
+    let after = handle.state();
+    assert_eq!(after.target, 60, "target was not applied");
+    assert_eq!(after.mode, before, "set must not touch the mode");
+
+    handle.shutdown();
+}
+
+#[test]
+fn set_rejects_a_temperature_outside_the_supported_range() {
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    let path = config.to_str().unwrap();
+
+    for bad in ["25", "105", "boiling"] {
+        Command::cargo_bin("d3home")
+            .unwrap()
+            .args(["--config", path, "kettle", "set", bad])
+            .assert()
+            .code(2);
+    }
+
+    // A bare `set` has nothing to set and must say so rather than defaulting.
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "kettle", "set"])
+        .assert()
+        .code(2);
+
+    handle.shutdown();
+}
+
+#[test]
+fn start_reports_what_the_kettle_agreed_to_do() {
+    // A silent success left the user guessing whether anything happened.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
+    let path = config.to_str().unwrap();
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "kettle", "start", "70"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("70"));
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "kettle", "start"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("100"));
 
     handle.shutdown();
 }

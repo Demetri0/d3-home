@@ -283,6 +283,33 @@ fn found_human(f: &Found) -> String {
     format!("{} at {}:{} (public key: {})", f.mac, f.address_display(), f.port, hex_encode(&f.public_wire))
 }
 
+/// Confirm a heat that the device acknowledged.
+pub fn print_heating_started(target: u8, json: bool) {
+    if json {
+        println!("{{\"action\":\"start\",\"target_temperature\":{target}}}");
+    } else {
+        println!("heating to {target} \u{00b0}C");
+    }
+}
+
+/// Confirm a target the device acknowledged, with no mode change.
+pub fn print_target_set(target: u8, json: bool) {
+    if json {
+        println!("{{\"action\":\"set\",\"target_temperature\":{target}}}");
+    } else {
+        println!("target set to {target} \u{00b0}C, kettle not started");
+    }
+}
+
+/// Confirm that the kettle was told to stop.
+pub fn print_stopped(json: bool) {
+    if json {
+        println!("{{\"action\":\"off\"}}");
+    } else {
+        println!("stopped");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

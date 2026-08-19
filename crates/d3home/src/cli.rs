@@ -7,11 +7,13 @@
 //! *how* any command runs. That lives in `commands::registry` and
 //! `commands::kettle`.
 //!
-//! Global flags (`--config`, `--json`, `--device`) are consumed by `main.rs`
-//! via `clap` before `parse` ever sees the remaining words: this function
-//! only cares about the "first word is a built-in or a device" split, which
-//! `clap`'s static subcommand model has no way to express, because the set
-//! of device names is only known once the config is loaded.
+//! Global flags (`--config`, `--json`, `--device`, `--help`) are stripped
+//! out by [`split_globals`] first, from *any* position on the command line,
+//! and [`parse`] then sees only the remaining words. They are handled here
+//! rather than by `clap` because the first word is a device name drawn from
+//! the user's config, which forces a dynamic subcommand -- and a dynamic
+//! subcommand swallows everything after it verbatim, which is exactly how
+//! a trailing `--json` came to be silently ignored.
 
 use crate::config::RESERVED;
 
@@ -62,6 +64,66 @@ impl std::fmt::Display for UsageError {
 }
 
 impl std::error::Error for UsageError {}
+
+/// The global options, which may appear anywhere on the command line --
+/// before the device word, after the action, or after the action's own
+/// arguments. They are all "how to run this", never "what to run".
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Globals {
+    pub config: Option<std::path::PathBuf>,
+    pub json: bool,
+    pub device: Option<String>,
+    pub help: bool,
+}
+
+/// Pull the global options out of `argv`, wherever they appear, and return
+/// them alongside the words that remain.
+///
+/// A bare `--` stops option processing, so a device or alias whose name
+/// begins with a dash is still reachable. An unrecognised `--flag` is an
+/// error rather than a word: silently treating `--jsno` as a device name
+/// would send the user hunting through their config for a device they never
+/// created.
+pub fn split_globals(argv: &[String]) -> Result<(Globals, Vec<String>), UsageError> {
+    let mut globals = Globals::default();
+    let mut words = Vec::new();
+    let mut iter = argv.iter().peekable();
+    let mut literal = false;
+
+    while let Some(arg) = iter.next() {
+        if literal {
+            words.push(arg.clone());
+            continue;
+        }
+
+        // A value that needs its own argument: `--flag value` or `--flag=value`.
+        let mut take_value = |name: &str| -> Result<String, UsageError> {
+            match arg.split_once('=') {
+                Some((_, value)) if !value.is_empty() => Ok(value.to_string()),
+                Some((_, _)) => Err(UsageError(format!("{name} needs a value"))),
+                None => iter
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| UsageError(format!("{name} needs a value"))),
+            }
+        };
+
+        let name = arg.split('=').next().unwrap_or(arg);
+        match name {
+            "--" => literal = true,
+            "--json" => globals.json = true,
+            "--help" | "-h" => globals.help = true,
+            "--config" => globals.config = Some(take_value("--config")?.into()),
+            "--device" => globals.device = Some(take_value("--device")?),
+            other if other.starts_with("--") => {
+                return Err(UsageError(format!("unknown option '{other}'; try 'd3home help'")));
+            }
+            _ => words.push(arg.clone()),
+        }
+    }
+
+    Ok((globals, words))
+}
 
 /// Interpret the words that follow the global flags. The first word is a
 /// built-in command if it appears in [`RESERVED`]; otherwise it is taken to
@@ -242,6 +304,62 @@ impl From<std::io::Error> for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn a_global_flag_is_honoured_wherever_it_appears() {
+        // The motivating bug: `--json` after the action was silently dropped,
+        // so the user got human output and no hint that the flag was ignored.
+        for argv in [
+            words(&["--json", "kettle", "status"]),
+            words(&["kettle", "--json", "status"]),
+            words(&["kettle", "status", "--json"]),
+            words(&["kettle", "start", "80", "--json"]),
+        ] {
+            let (globals, rest) = split_globals(&argv).expect("parses");
+            assert!(globals.json, "--json lost in {argv:?}");
+            assert!(!rest.contains(&"--json".to_string()), "--json leaked into words");
+        }
+    }
+
+    #[test]
+    fn a_flag_taking_a_value_accepts_both_spellings_anywhere() {
+        let (a, rest_a) = split_globals(&words(&["kettle", "status", "--config", "/tmp/x.toml"])).unwrap();
+        let (b, rest_b) = split_globals(&words(&["--config=/tmp/x.toml", "kettle", "status"])).unwrap();
+
+        assert_eq!(a.config.as_deref(), Some(std::path::Path::new("/tmp/x.toml")));
+        assert_eq!(a.config, b.config);
+        assert_eq!(rest_a, words(&["kettle", "status"]));
+        assert_eq!(rest_b, rest_a);
+    }
+
+    #[test]
+    fn a_value_flag_with_nothing_after_it_is_an_error() {
+        assert!(split_globals(&words(&["kettle", "status", "--config"])).is_err());
+        assert!(split_globals(&words(&["--config=", "kettle"])).is_err());
+    }
+
+    #[test]
+    fn an_unknown_option_is_refused_rather_than_taken_for_a_device() {
+        // Treating `--jsno` as a device name would send the user hunting
+        // through their config for something they never created.
+        let err = split_globals(&words(&["kettle", "status", "--jsno"])).unwrap_err();
+        assert!(err.to_string().contains("--jsno"), "got: {err}");
+    }
+
+    #[test]
+    fn a_double_dash_lets_a_literal_flag_through_as_a_word() {
+        let (globals, rest) = split_globals(&words(&["alias", "add", "--", "--json", "kettle"])).unwrap();
+        assert!(!globals.json, "after -- it is a word, not a flag");
+        assert_eq!(rest, words(&["alias", "add", "--json", "kettle"]));
+    }
+
+    #[test]
+    fn help_is_recognised_from_any_position() {
+        for argv in [words(&["--help"]), words(&["kettle", "-h"]), words(&["kettle", "status", "--help"])] {
+            assert!(split_globals(&argv).unwrap().0.help, "help lost in {argv:?}");
+        }
+    }
 
     fn words(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()

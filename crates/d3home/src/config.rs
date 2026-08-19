@@ -129,6 +129,8 @@ pub struct Cached {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+    #[error("no device registry at {path} yet, so no devices are configured")]
+    NoRegistry { path: String },
     #[error("cannot access the config file: {0}")]
     Io(#[from] std::io::Error),
 
@@ -179,7 +181,15 @@ pub enum ConfigError {
 impl Config {
     /// Load and validate the registry from `path`.
     pub fn load(path: &Path) -> Result<Config, ConfigError> {
-        let text = std::fs::read_to_string(path)?;
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            // A missing registry is the normal state before any device has
+            // been added, not an I/O fault worth quoting errno for.
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ConfigError::NoRegistry { path: path.display().to_string() }
+            } else {
+                ConfigError::Io(e)
+            }
+        })?;
         warn_if_permissions_are_too_loose(path);
         let mut config: Config = toml::from_str(&text).map_err(|e| parse_error(&e, &text))?;
         for device in &mut config.devices {

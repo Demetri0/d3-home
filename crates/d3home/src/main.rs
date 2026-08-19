@@ -1,4 +1,4 @@
-//! The `d3home` entry point: turn `argv` into global options plus a word
+//! The `d3home` entry point: split `argv` into global options plus a word
 //! list, hand the word list to `cli::parse`, and route whatever comes back
 //! to the module that knows how to run it. Nothing about *how* a command
 //! behaves belongs here -- see `commands::registry` and `commands::kettle`.
@@ -9,50 +9,16 @@ mod config;
 mod output;
 mod progress;
 
-use std::path::{Path, PathBuf};
-
-use clap::Parser;
+use std::path::Path;
 
 use cli::{AppError, Builtin, ExitCode, Parsed};
 use commands::{kettle, registry};
 use config::{Config, ConfigError};
 
-/// Global options, plus every word that follows them. Whether the first of
-/// those words is a built-in command or a device name is decided later, by
-/// `cli::parse` -- see that module for why.
-#[derive(Parser)]
-#[command(name = "d3home", about = "Control smart home devices over the local network")]
-struct Args {
-    /// Path to the device registry. Defaults to `Config::default_path()`.
-    /// Tests always pass this explicitly, so they never touch the real one.
-    #[arg(long)]
-    config: Option<PathBuf>,
-
-    /// Emit machine-readable JSON instead of the human-readable summary.
-    #[arg(long)]
-    json: bool,
-
-    /// Use this device for the action that follows, instead of taking the
-    /// device from the first positional word.
-    #[arg(long)]
-    device: Option<String>,
-
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    rest: Vec<String>,
-}
-
 fn main() {
-    let args = Args::parse();
-    let config_path = args.config.clone().unwrap_or_else(Config::default_path);
+    let argv: Vec<String> = std::env::args().skip(1).collect();
 
-    let words: Vec<String> = match args.device {
-        Some(device) => std::iter::once(device).chain(args.rest).collect(),
-        None => args.rest,
-    };
-
-    let result = cli::parse(&words)
-        .map_err(AppError::from)
-        .and_then(|parsed| dispatch(parsed, &config_path, args.json));
+    let result = run(&argv);
 
     match result {
         Ok(()) => std::process::exit(ExitCode::Ok as i32),
@@ -61,6 +27,28 @@ fn main() {
             std::process::exit(err.exit_code() as i32);
         }
     }
+}
+
+/// Everything `main` does apart from turning the outcome into an exit code,
+/// split out so it is reachable from a test.
+fn run(argv: &[String]) -> Result<(), AppError> {
+    let (globals, words) = cli::split_globals(argv)?;
+
+    // `--help` anywhere wins over whatever else was typed: someone who asks
+    // for help has already stopped wanting the command to run.
+    if globals.help || words.first().is_some_and(|w| w == "help") {
+        registry::help();
+        return Ok(());
+    }
+
+    let config_path = globals.config.clone().unwrap_or_else(Config::default_path);
+    let words: Vec<String> = match globals.device {
+        Some(device) => std::iter::once(device).chain(words).collect(),
+        None => words,
+    };
+
+    let parsed = cli::parse(&words)?;
+    dispatch(parsed, &config_path, globals.json)
 }
 
 /// Route a parsed command to the module that knows how to run it. Builtins

@@ -27,7 +27,8 @@ use crate::progress::{Phase, with_spinner};
 /// `syncleo::Error::DeviceNak` (exit code 6), which is an honest answer
 /// grounded in what the hardware actually said, rather than a client-side
 /// guess about a step the protocol may not enforce at all.
-pub const MIN_TEMPERATURE: u8 = 30;
+pub const BOIL_TEMPERATURE: u8 = 100;
+const MIN_TEMPERATURE: u8 = 30;
 pub const MAX_TEMPERATURE: u8 = 100;
 
 /// How long `connect` waits for the handshake to complete.
@@ -68,15 +69,16 @@ const WATCH_RECONNECT_BACKOFF_CEILING: Duration = Duration::from_secs(5);
 pub fn run(device: &Device, action: &[String], json: bool, config_path: &Path) -> Result<(), AppError> {
     let (verb, rest) = action
         .split_first()
-        .ok_or_else(|| AppError::Usage("missing action; try status, start, off, or watch".into()))?;
+        .ok_or_else(|| AppError::Usage("missing action; try status, start, set, off, or watch".into()))?;
 
     match verb.as_str() {
         "status" => status(device, json, config_path),
-        "start" => start(device, rest, config_path),
-        "off" => off(device, config_path),
+        "start" => start(device, rest, json, config_path),
+        "set" => set(device, rest, json, config_path),
+        "off" => off(device, json, config_path),
         "watch" => watch(device, json, config_path),
         other => Err(AppError::Usage(format!(
-            "unknown kettle action '{other}'; try status, start, off, or watch"
+            "unknown kettle action '{other}'; try status, start, set, off, or watch"
         ))),
     }
 }
@@ -99,7 +101,7 @@ fn status(device: &Device, json: bool, config_path: &Path) -> Result<(), AppErro
     Ok(())
 }
 
-fn start(device: &Device, args: &[String], config_path: &Path) -> Result<(), AppError> {
+fn start(device: &Device, args: &[String], json: bool, config_path: &Path) -> Result<(), AppError> {
     // Validated before connecting: a bad temperature should fail instantly,
     // not after a network round trip that was always going to be wasted.
     let target = parse_target_temperature(args)?;
@@ -112,6 +114,10 @@ fn start(device: &Device, args: &[String], config_path: &Path) -> Result<(), App
         }
         Ok(())
     })?;
+
+    // Only reached once the device acknowledged, so this reports what the
+    // kettle agreed to do, not what we hoped it would.
+    output::print_heating_started(target.unwrap_or(BOIL_TEMPERATURE), json);
     Ok(())
 }
 
@@ -153,9 +159,33 @@ fn send_custom_target(client: &mut Client, temperature: u8) -> Result<(), syncle
     Ok(())
 }
 
-fn off(device: &Device, config_path: &Path) -> Result<(), AppError> {
+/// Set the target temperature and nothing else -- no mode change in either
+/// direction.
+///
+/// This is the mode-free half of `start N`: useful to preload a target on a
+/// kettle that is off, and to retarget a heat that is already running. The
+/// same reasoning that made `start N` send the target first applies here by
+/// construction, since there is no second command to leave half-applied.
+fn set(device: &Device, args: &[String], json: bool, config_path: &Path) -> Result<(), AppError> {
+    let target = parse_target_temperature(args)?.ok_or_else(|| {
+        AppError::Usage("usage: d3home <device> set <temperature>".into())
+    })?;
+
+    let mut client = connect(device, config_path)?;
+    with_spinner(Phase::Sending, || -> Result<(), AppError> {
+        client.send(Command::TargetTemperature(target))?;
+        Ok(())
+    })?;
+
+    output::print_target_set(target, json);
+    Ok(())
+}
+
+fn off(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
     let mut client = connect(device, config_path)?;
     with_spinner(Phase::Sending, || client.send(Command::Mode(PowerMode::Off)))?;
+
+    output::print_stopped(json);
     Ok(())
 }
 
