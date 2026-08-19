@@ -14,7 +14,7 @@
 //! on the pure-session side.
 
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicU8, AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -110,7 +110,11 @@ impl KettleHandle {
     /// Read the simulator's current state. Safe to call from another thread
     /// while the simulator is running: it is read from a shared lock.
     pub fn state(&self) -> SimulatedState {
-        *self.shared.state.lock().expect("simulator state lock poisoned")
+        *self
+            .shared
+            .state
+            .lock()
+            .expect("simulator state lock poisoned")
     }
 
     /// From now on, silently drop every `Cmd` frame from an established
@@ -155,7 +159,9 @@ impl KettleHandle {
     /// (i.e. before `Client::connect`), the same as `ignore_commands` and
     /// `reject_commands` must be called before the command they affect.
     pub fn delay_state_burst(&self, delay: Duration) {
-        self.shared.burst_delay_ms.store(delay.as_millis() as u64, Ordering::SeqCst);
+        self.shared
+            .burst_delay_ms
+            .store(delay.as_millis() as u64, Ordering::SeqCst);
     }
 
     /// From now on, silently drop every incoming frame -- including a
@@ -168,7 +174,11 @@ impl KettleHandle {
     /// again at the same cached endpoint without needing real discovery.
     pub fn vanish_for(&self, duration: Duration) {
         let until = Instant::now() + duration;
-        *self.shared.silent_until.lock().expect("silent_until lock poisoned") = Some(until);
+        *self
+            .shared
+            .silent_until
+            .lock()
+            .expect("silent_until lock poisoned") = Some(until);
     }
 
     /// How many `Ack` frames from the peer this simulator has decrypted and
@@ -249,7 +259,12 @@ impl KettleSimulator {
             thread::spawn(move || run(socket, token, &shared, send_state_burst))
         };
 
-        Ok(KettleHandle { addr, public_wire: public_wire(&DEVICE_PRIVATE), shared, thread: Some(thread) })
+        Ok(KettleHandle {
+            addr,
+            public_wire: public_wire(&DEVICE_PRIVATE),
+            shared,
+            thread: Some(thread),
+        })
     }
 }
 
@@ -303,7 +318,9 @@ fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bo
             continue;
         }
 
-        let Ok(frame) = Frame::parse(&buf[..n]) else { continue };
+        let Ok(frame) = Frame::parse(&buf[..n]) else {
+            continue;
+        };
 
         match &peer {
             Some(p) if p.addr == from => {
@@ -312,8 +329,15 @@ fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bo
                 }
             }
             _ => {
-                pending_burst =
-                    handle_handshake(&socket, from, &frame, token, &mut peer, shared, send_state_burst);
+                pending_burst = handle_handshake(
+                    &socket,
+                    from,
+                    &frame,
+                    token,
+                    &mut peer,
+                    shared,
+                    send_state_burst,
+                );
             }
         }
     }
@@ -325,7 +349,11 @@ fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bo
 /// and there is no second caller for whom "still `Some`" would mean
 /// anything different from "expired."
 fn is_silent(shared: &Shared) -> bool {
-    match *shared.silent_until.lock().expect("silent_until lock poisoned") {
+    match *shared
+        .silent_until
+        .lock()
+        .expect("silent_until lock poisoned")
+    {
         Some(until) => Instant::now() < until,
         None => false,
     }
@@ -348,8 +376,9 @@ fn handle_handshake(
     shared: &Shared,
     send_state_burst: bool,
 ) -> Option<PendingBurst> {
-    let is_handshake_payload =
-        frame.head.ty == FrameType::Cmd && frame.payload.len() == 1 + 32 + 16 && frame.payload[0] == 0x00;
+    let is_handshake_payload = frame.head.ty == FrameType::Cmd
+        && frame.payload.len() == 1 + 32 + 16
+        && frame.payload[0] == 0x00;
     if !is_handshake_payload {
         return None;
     }
@@ -366,7 +395,10 @@ fn handle_handshake(
     Decryptor::<Aes128>::new(&raw.outkey.into(), &raw.inkey.into())
         .decrypt_blocks(core::slice::from_mut((&mut block).into()));
 
-    let keys = SessionKeys { inkey: raw.outkey, outkey: raw.inkey };
+    let keys = SessionKeys {
+        inkey: raw.outkey,
+        outkey: raw.inkey,
+    };
 
     if block != token {
         let nak = encrypt_frame(&keys, 0, FrameType::Nak, &[]).to_bytes();
@@ -374,7 +406,12 @@ fn handle_handshake(
         return None;
     }
 
-    let mode_byte = shared.state.lock().expect("state lock poisoned").mode.as_u8();
+    let mode_byte = shared
+        .state
+        .lock()
+        .expect("state lock poisoned")
+        .mode
+        .as_u8();
     let body = vec![
         ty::HANDSHAKE,
         PROTOCOL_VERSION as u8,
@@ -394,7 +431,11 @@ fn handle_handshake(
             report_state_burst(socket, from, &keys, shared);
             None
         } else {
-            Some(PendingBurst { due: Instant::now() + Duration::from_millis(delay_ms), to: from, keys: keys.clone() })
+            Some(PendingBurst {
+                due: Instant::now() + Duration::from_millis(delay_ms),
+                to: from,
+                keys: keys.clone(),
+            })
         }
     };
 
@@ -419,7 +460,12 @@ fn report_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, sh
 
     let mut diagnostic = vec![ty::DIAGNOSTIC];
     diagnostic.extend_from_slice(&[0u8; 20]); // header: contents unknown, only the length is
-    for (tag, value) in [(*b"udps", 1u32), (*b"IDLE", 2u32), (*b"Tmr\0", 3u32), (*b"rtT\0", 4u32)] {
+    for (tag, value) in [
+        (*b"udps", 1u32),
+        (*b"IDLE", 2u32),
+        (*b"Tmr\0", 3u32),
+        (*b"rtT\0", 4u32),
+    ] {
         diagnostic.extend_from_slice(&tag);
         diagnostic.extend_from_slice(&value.to_le_bytes());
     }
@@ -461,7 +507,9 @@ fn next_seq(shared: &Shared) -> u8 {
 fn handle_established(socket: &UdpSocket, peer: &Peer, frame: &Frame, shared: &Shared) {
     match frame.head.ty {
         FrameType::Cmd => {
-            let Ok(body) = decrypt_frame(&peer.keys, frame) else { return };
+            let Ok(body) = decrypt_frame(&peer.keys, frame) else {
+                return;
+            };
 
             let seen = shared.commands_seen.fetch_add(1, Ordering::SeqCst);
             if seen >= shared.ack_limit.load(Ordering::SeqCst) {
@@ -519,7 +567,8 @@ fn handle_established(socket: &UdpSocket, peer: &Peer, frame: &Frame, shared: &S
                         let target = shared.state.lock().expect("state lock poisoned").target;
                         let seq = next_seq(shared);
                         let body = vec![ty::TARGET_TEMPERATURE, target, 0];
-                        let frame = encrypt_frame(&peer.keys, seq, FrameType::Cmd, &body).to_bytes();
+                        let frame =
+                            encrypt_frame(&peer.keys, seq, FrameType::Cmd, &body).to_bytes();
                         let _ = socket.send_to(&frame, peer.addr);
                     }
                 }

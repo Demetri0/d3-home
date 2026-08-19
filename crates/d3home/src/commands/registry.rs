@@ -79,7 +79,9 @@ pub fn alias_add(config_path: &Path, alias: &str, device: &str) -> Result<(), Ap
         .devices
         .iter_mut()
         .find(|d| d.name == device)
-        .ok_or_else(|| ConfigError::UnknownDevice { name: device.to_string() })?;
+        .ok_or_else(|| ConfigError::UnknownDevice {
+            name: device.to_string(),
+        })?;
     target.aliases.push(alias.to_string());
 
     config.validate()?;
@@ -90,7 +92,10 @@ pub fn alias_add(config_path: &Path, alias: &str, device: &str) -> Result<(), Ap
 /// Remove `alias` from whichever device has it.
 pub fn alias_rm(config_path: &Path, alias: &str) -> Result<(), AppError> {
     let mut config = Config::load(config_path)?;
-    let owner = config.devices.iter_mut().find(|d| d.aliases.iter().any(|a| a == alias));
+    let owner = config
+        .devices
+        .iter_mut()
+        .find(|d| d.aliases.iter().any(|a| a == alias));
 
     match owner {
         Some(device) => device.aliases.retain(|a| a != alias),
@@ -149,7 +154,6 @@ pub fn help_text() -> String {
     out
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,8 +177,10 @@ mod tests {
 
     #[test]
     fn discover_caches_the_endpoint_of_a_matching_configured_device() {
-        let dir =
-            std::env::temp_dir().join(format!("d3home-test-cache-discovered-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "d3home-test-cache-discovered-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         std::fs::write(&path, sample_kettle_toml()).unwrap();
@@ -182,7 +188,12 @@ mod tests {
         cache_discovered(&path, &[found("deadbeefdead")]).unwrap();
 
         let reloaded = Config::load(&path).unwrap();
-        let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("cache was written");
+        let cached = reloaded
+            .resolve("kettle")
+            .unwrap()
+            .cached
+            .as_ref()
+            .expect("cache was written");
         assert_eq!(cached.port, 9999);
         assert_eq!(cached.public_key, hex_encode(&[0x55; 32]));
 
@@ -191,8 +202,10 @@ mod tests {
 
     #[test]
     fn discover_caches_the_interface_of_a_link_local_device() {
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-cache-discovered-interface-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "d3home-test-cache-discovered-interface-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         std::fs::write(&path, sample_kettle_toml()).unwrap();
@@ -203,7 +216,12 @@ mod tests {
         cache_discovered(&path, &[link_local]).unwrap();
 
         let reloaded = Config::load(&path).unwrap();
-        let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("cache was written");
+        let cached = reloaded
+            .resolve("kettle")
+            .unwrap()
+            .cached
+            .as_ref()
+            .expect("cache was written");
         assert_eq!(cached.interface.as_deref(), Some("enp8s0"));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -211,8 +229,10 @@ mod tests {
 
     #[test]
     fn discover_ignores_a_device_that_does_not_match_any_configured_mac() {
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-cache-discovered-nomatch-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "d3home-test-cache-discovered-nomatch-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         std::fs::write(&path, sample_kettle_toml()).unwrap();
@@ -231,8 +251,10 @@ mod tests {
     fn discover_without_a_config_file_yet_is_not_an_error() {
         // `discover` is useful before any device has ever been configured;
         // a missing config file must not turn into a warning on every run.
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-cache-discovered-missing-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "d3home-test-cache-discovered-missing-{}",
+            std::process::id()
+        ));
         let path = dir.join("devices.toml");
 
         assert!(cache_discovered(&path, &[found("deadbeefdead")]).is_ok());

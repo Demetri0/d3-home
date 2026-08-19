@@ -35,7 +35,11 @@ pub struct ShareLink {
 /// strict about the two fields that matter, because a MAC or token that is
 /// subtly wrong produces a device that never connects and no clue why.
 pub fn parse_share_link(input: &str) -> Result<ShareLink, AppError> {
-    let bad = |what: &str| AppError::Usage(format!("this does not look like a device-share link: {what}"));
+    let bad = |what: &str| {
+        AppError::Usage(format!(
+            "this does not look like a device-share link: {what}"
+        ))
+    };
 
     let (path, query) = input.split_once('?').ok_or_else(|| bad("no token in it"))?;
     let mac = path
@@ -55,8 +59,14 @@ pub fn parse_share_link(input: &str) -> Result<ShareLink, AppError> {
         }
     }
 
-    let token = token.filter(|t| !t.is_empty()).ok_or_else(|| bad("no token in it"))?;
-    Ok(ShareLink { mac: mac.to_string(), token, model })
+    let token = token
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| bad("no token in it"))?;
+    Ok(ShareLink {
+        mac: mac.to_string(),
+        token,
+        model,
+    })
 }
 
 /// Minimal percent-decoding, enough for a model name like `PWK%201725CGLD`.
@@ -190,7 +200,9 @@ fn check_name(name: &str) -> Result<(), AppError> {
 /// to ask and failing with a precise complaint when there is not.
 pub fn resolve(request: AddRequest, prompt: bool) -> Result<Device, AppError> {
     let missing = |what: &str, how: &str| {
-        AppError::Usage(format!("no {what} given; pass {how}, or run `d3home add` in a terminal"))
+        AppError::Usage(format!(
+            "no {what} given; pass {how}, or run `d3home add` in a terminal"
+        ))
     };
 
     let mac = match request.mac {
@@ -219,9 +231,9 @@ pub fn resolve(request: AddRequest, prompt: bool) -> Result<Device, AppError> {
         token,
         cached: None,
     };
-    device.token_bytes().map_err(|_| {
-        AppError::Usage("the token must be 32 hexadecimal characters".into())
-    })?;
+    device
+        .token_bytes()
+        .map_err(|_| AppError::Usage("the token must be 32 hexadecimal characters".into()))?;
     Ok(device)
 }
 
@@ -263,7 +275,11 @@ fn ask(what: &str) -> Result<String, AppError> {
 
 fn ask_with_default(what: &str, default: &str) -> Result<String, AppError> {
     let answer = ask(&format!("{what} [{default}]"))?;
-    Ok(if answer.is_empty() { default.to_string() } else { answer })
+    Ok(if answer.is_empty() {
+        default.to_string()
+    } else {
+        answer
+    })
 }
 
 /// Read a secret without echoing it. The token is the key to the device;
@@ -305,7 +321,10 @@ mod tests {
         let request = parse_args(&[LINK.to_string()]).unwrap();
         assert_eq!(request.mac.as_deref(), Some("deadbeefdead"));
         assert_eq!(request.model.as_deref(), Some("PWK 1725CGLD"));
-        assert!(request.name.is_none(), "the link carries a model, not a name");
+        assert!(
+            request.name.is_none(),
+            "the link carries a model, not a name"
+        );
     }
 
     #[test]
@@ -316,15 +335,24 @@ mod tests {
 
     #[test]
     fn flags_and_a_link_can_be_mixed_with_flags_winning_on_the_name() {
-        let args: Vec<String> = ["--name", "k", LINK].iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = ["--name", "k", LINK]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let request = parse_args(&args).unwrap();
         assert_eq!(request.name.as_deref(), Some("k"));
-        assert_eq!(request.token.as_deref(), Some("deadbeefdeadbeefdeadbeefdeadbeef"));
+        assert_eq!(
+            request.token.as_deref(),
+            Some("deadbeefdeadbeefdeadbeefdeadbeef")
+        );
     }
 
     #[test]
     fn without_a_terminal_a_missing_field_names_itself() {
-        let request = AddRequest { name: Some("kettle".into()), ..Default::default() };
+        let request = AddRequest {
+            name: Some("kettle".into()),
+            ..Default::default()
+        };
         let err = resolve(request, false).unwrap_err().to_string();
         assert!(err.contains("device address"), "got: {err}");
 

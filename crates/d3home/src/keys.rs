@@ -61,12 +61,18 @@ impl QuitOnKey {
     pub fn start() -> Self {
         let quit = Quit::default();
         if !std::io::stdin().is_terminal() {
-            return Self { quit, restore: None };
+            return Self {
+                quit,
+                restore: None,
+            };
         }
 
         let mut original: libc::termios = unsafe { std::mem::zeroed() };
         if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut original) } != 0 {
-            return Self { quit, restore: None };
+            return Self {
+                quit,
+                restore: None,
+            };
         }
 
         let mut raw = original;
@@ -74,7 +80,10 @@ impl QuitOnKey {
         raw.c_cc[libc::VMIN] = 1;
         raw.c_cc[libc::VTIME] = 0;
         if unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) } != 0 {
-            return Self { quit, restore: None };
+            return Self {
+                quit,
+                restore: None,
+            };
         }
 
         // Hand the original to the signal handlers before arming them.
@@ -98,7 +107,10 @@ impl QuitOnKey {
             }
         });
 
-        Self { quit, restore: Some(original) }
+        Self {
+            quit,
+            restore: Some(original),
+        }
     }
 
     pub fn quit(&self) -> Quit {
@@ -124,7 +136,10 @@ mod tests {
         // of `watch` in a pipe: it must not change terminal state it does
         // not own, and must never decide on its own to stop.
         let watcher = QuitOnKey::start();
-        assert!(watcher.restore.is_none(), "terminal settings were changed with no terminal");
+        assert!(
+            watcher.restore.is_none(),
+            "terminal settings were changed with no terminal"
+        );
         assert!(!watcher.quit().requested());
     }
 

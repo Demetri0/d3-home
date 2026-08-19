@@ -11,8 +11,15 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Built-in subcommands that a device alias must never shadow.
-pub const RESERVED: &[&str] =
-    &["add", "completions", "__complete", "discover", "devices", "alias", "help"];
+pub const RESERVED: &[&str] = &[
+    "add",
+    "completions",
+    "__complete",
+    "discover",
+    "devices",
+    "alias",
+    "help",
+];
 
 /// Hex-encode `bytes` in lowercase -- the same representation the config
 /// file's `token` and `public_key` fields, and mDNS's `public` TXT record,
@@ -74,7 +81,10 @@ fn hex_nibble(b: u8) -> Option<u8> {
 /// at load, rather than at every comparison site, so nothing downstream
 /// has to remember to normalise before comparing.
 pub(crate) fn normalize_mac(mac: &str) -> String {
-    mac.chars().filter(|c| *c != ':' && *c != '-').map(|c| c.to_ascii_lowercase()).collect()
+    mac.chars()
+        .filter(|c| *c != ':' && *c != '-')
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -186,7 +196,9 @@ impl Config {
             // A missing registry is the normal state before any device has
             // been added, not an I/O fault worth quoting errno for.
             if e.kind() == std::io::ErrorKind::NotFound {
-                ConfigError::NoRegistry { path: path.display().to_string() }
+                ConfigError::NoRegistry {
+                    path: path.display().to_string(),
+                }
             } else {
                 ConfigError::Io(e)
             }
@@ -264,8 +276,7 @@ impl Config {
                         second: device.name.clone(),
                     });
                 }
-                if alias.as_str() != device.name.as_str() && device_names.contains(alias.as_str())
-                {
+                if alias.as_str() != device.name.as_str() && device_names.contains(alias.as_str()) {
                     return Err(ConfigError::AliasShadowsDevice {
                         alias: alias.clone(),
                         device: device.name.clone(),
@@ -347,7 +358,9 @@ impl Config {
             .map(PathBuf::from)
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| {
-                let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+                let home = std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_default();
                 home.join(".config")
             });
         config_home.join("d3home").join("devices.toml")
@@ -383,7 +396,12 @@ fn create_temp_file(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, st
     for _ in 0..ATTEMPTS {
         let suffix: u64 = rand::random();
         let candidate = dir.join(format!(".{file_name}.tmp-{suffix:016x}"));
-        match OpenOptions::new().write(true).create_new(true).mode(0o600).open(&candidate) {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&candidate)
+        {
             Ok(file) => return Ok((candidate, file)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -412,7 +430,9 @@ fn create_temp_file(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, st
 /// otherwise-working config.
 fn warn_if_permissions_are_too_loose(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
-    let Ok(metadata) = std::fs::metadata(path) else { return };
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
     if let Some(warning) = loose_permission_warning(path, metadata.permissions().mode()) {
         crate::output::print_warning(&warning);
     }
@@ -515,7 +535,10 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
 
         let cached = config.resolve("kettle").unwrap().cached.as_ref().unwrap();
         assert_eq!(cached.port, 8888);
-        assert_eq!(cached.interface, None, "a config written before this field existed still loads");
+        assert_eq!(
+            cached.interface, None,
+            "a config written before this field existed still loads"
+        );
     }
 
     #[test]
@@ -524,8 +547,10 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         // only a link-local IPv6 address, which cannot be reached without
         // the interface it was seen on -- so this has to survive a
         // save/load cycle, not just a single parse.
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-cached-interface-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "d3home-test-cached-interface-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
 
@@ -549,7 +574,10 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
     fn refuses_an_alias_that_shadows_a_builtin_command() {
         // Silently losing `d3home discover` to an alias would be a nasty surprise.
         let toml = KETTLE.replace(r#"["k", "чайник"]"#, r#"["discover"]"#);
-        assert!(matches!(parse(&toml), Err(ConfigError::ReservedAlias { .. })));
+        assert!(matches!(
+            parse(&toml),
+            Err(ConfigError::ReservedAlias { .. })
+        ));
     }
 
     #[test]
@@ -558,9 +586,11 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         // permanently unreachable: `d3home help status` always routes to
         // the built-in help text, never to device resolution.
         let toml = KETTLE.replace(r#"name = "kettle""#, r#"name = "help""#);
-        assert!(matches!(parse(&toml), Err(ConfigError::ReservedAlias { .. })));
+        assert!(matches!(
+            parse(&toml),
+            Err(ConfigError::ReservedAlias { .. })
+        ));
     }
-
 
     #[test]
     fn an_alias_with_a_colon_loads_and_resolves() {
@@ -574,7 +604,10 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
     #[test]
     fn refuses_an_empty_alias() {
         let toml = KETTLE.replace(r#"["k", "чайник"]"#, r#"[""]"#);
-        assert!(matches!(parse(&toml), Err(ConfigError::InvalidAlias { .. })));
+        assert!(matches!(
+            parse(&toml),
+            Err(ConfigError::InvalidAlias { .. })
+        ));
     }
 
     #[test]
@@ -585,7 +618,10 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         // then never be used: `d3home --json status` has the parser consume
         // `--json` as the global flag long before alias resolution runs.
         let toml = KETTLE.replace(r#"["k", "чайник"]"#, r#"["--json"]"#);
-        assert!(matches!(parse(&toml), Err(ConfigError::InvalidAlias { .. })));
+        assert!(matches!(
+            parse(&toml),
+            Err(ConfigError::InvalidAlias { .. })
+        ));
     }
 
     #[test]
@@ -593,7 +629,10 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         let toml = format!(
             "{KETTLE}\n[[devices]]\nname = \"other\"\naliases = [\"k\"]\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n"
         );
-        assert!(matches!(parse(&toml), Err(ConfigError::DuplicateAlias { .. })));
+        assert!(matches!(
+            parse(&toml),
+            Err(ConfigError::DuplicateAlias { .. })
+        ));
     }
 
     #[test]
@@ -601,7 +640,10 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         let toml = format!(
             "{KETTLE}\n[[devices]]\nname = \"other\"\naliases = [\"kettle\"]\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n"
         );
-        assert!(matches!(parse(&toml), Err(ConfigError::AliasShadowsDevice { .. })));
+        assert!(matches!(
+            parse(&toml),
+            Err(ConfigError::AliasShadowsDevice { .. })
+        ));
     }
 
     #[test]
@@ -611,7 +653,10 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         let toml = format!(
             "{KETTLE}\n[[devices]]\nname = \"kettle\"\naliases = []\ndriver = \"syncleo\"\nmac = \"aa\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n"
         );
-        assert!(matches!(parse(&toml), Err(ConfigError::DuplicateDevice { .. })));
+        assert!(matches!(
+            parse(&toml),
+            Err(ConfigError::DuplicateDevice { .. })
+        ));
     }
 
     #[test]
@@ -620,13 +665,19 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
     #[allow(clippy::redundant_pattern_matching)]
     fn parses_the_token_into_sixteen_bytes() {
         let config = parse(KETTLE).unwrap();
-        assert_eq!(config.resolve("k").unwrap().token_bytes().unwrap(), [
-            0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
-            0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
-        ]);
+        assert_eq!(
+            config.resolve("k").unwrap().token_bytes().unwrap(),
+            [
+                0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad,
+                0xbe, 0xef,
+            ]
+        );
 
         let bad = KETTLE.replace("deadbeefdeadbeefdeadbeefdeadbeef", "nothex");
-        assert!(matches!(parse(&bad).unwrap().resolve("k").unwrap().token_bytes(), Err(_)));
+        assert!(matches!(
+            parse(&bad).unwrap().resolve("k").unwrap().token_bytes(),
+            Err(_)
+        ));
     }
 
     #[test]
@@ -637,7 +688,11 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         // `&self.token[0..2]` then sliced into the middle of the first "€"
         // and panicked -- quoting the token itself in the panic message.
         let token = "€€€€€€€€€€ab";
-        assert_eq!(token.len(), 32, "fixture must be exactly 32 bytes to reach the old guard");
+        assert_eq!(
+            token.len(),
+            32,
+            "fixture must be exactly 32 bytes to reach the old guard"
+        );
         assert_eq!(token.chars().count(), 12, "and clearly not 32 *characters*");
 
         let toml = KETTLE.replace("deadbeefdeadbeefdeadbeefdeadbeef", token);
@@ -658,9 +713,13 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         // where `toml`'s own `Display` would quote the source line
         // containing the token.
         let token = "deadbeefdeadbeefdeadbeefdeadbeef";
-        let malformed = KETTLE.replace(&format!("token = \"{token}\""), &format!("token = \"{token}"));
+        let malformed = KETTLE.replace(
+            &format!("token = \"{token}\""),
+            &format!("token = \"{token}"),
+        );
 
-        let dir = std::env::temp_dir().join(format!("d3home-test-parse-error-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("d3home-test-parse-error-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         std::fs::write(&path, &malformed).unwrap();
@@ -693,7 +752,8 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
             "[[devices]]\nname = \"kettle\"\naliases = [\"k\", \"чайник\"]\ndriver = \"syncleo\"\nmac = \"deadbeefdead\"\ntoken = \"{token}\n"
         );
 
-        let dir = std::env::temp_dir().join(format!("d3home-test-multibyte-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("d3home-test-multibyte-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         std::fs::write(&path, &toml).unwrap();
@@ -730,7 +790,8 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
     fn fixes_permissions_on_a_pre_existing_config_file() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join(format!("d3home-test-overwrite-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("d3home-test-overwrite-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
 
@@ -747,8 +808,14 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         );
 
         let contents = std::fs::read_to_string(&path).unwrap();
-        assert!(contents.contains("kettle"), "the new config must actually be written");
-        assert!(!contents.contains("stale"), "the old contents must be replaced");
+        assert!(
+            contents.contains("kettle"),
+            "the new config must actually be written"
+        );
+        assert!(
+            !contents.contains("stale"),
+            "the old contents must be replaced"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -824,8 +891,11 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         let dir = std::env::temp_dir().join(format!("d3home-test-mac-case-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
-        std::fs::write(&path, KETTLE.replace(r#"mac = "deadbeefdead""#, r#"mac = "DE:AD:BE:EF:DE:AD""#))
-            .unwrap();
+        std::fs::write(
+            &path,
+            KETTLE.replace(r#"mac = "deadbeefdead""#, r#"mac = "DE:AD:BE:EF:DE:AD""#),
+        )
+        .unwrap();
 
         let config = Config::load(&path).unwrap();
         assert_eq!(config.resolve("kettle").unwrap().mac, "deadbeefdead");
@@ -853,8 +923,10 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         // corruption), not something this pins as a bug. What it does pin
         // is the *shape* of the loss: a clean "later rename wins" outcome,
         // never a torn or merged file.
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-interleaved-save-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "d3home-test-interleaved-save-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         parse(KETTLE).unwrap().save(&path).unwrap();
@@ -902,13 +974,17 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         // work for every command, the same way it always did.
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join(format!("d3home-test-loose-perms-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("d3home-test-loose-perms-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         std::fs::write(&path, KETTLE).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        assert!(Config::load(&path).is_ok(), "a loose permission must warn, not refuse to load");
+        assert!(
+            Config::load(&path).is_ok(),
+            "a loose permission must warn, not refuse to load"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

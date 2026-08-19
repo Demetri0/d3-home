@@ -60,7 +60,12 @@ impl Command {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    HandshakeResponse { protocol: u16, fw_major: u8, fw_minor: u8, mode: u8 },
+    HandshakeResponse {
+        protocol: u16,
+        fw_major: u8,
+        fw_minor: u8,
+        mode: u8,
+    },
     Mode(PowerMode),
     TargetTemperature(u8),
     CurrentTemperature(u8),
@@ -82,7 +87,10 @@ pub enum Event {
     Hardware([u8; 3]),
     Diagnostic(Vec<u8>),
     Ping,
-    Unknown { ty: u8, data: Vec<u8> },
+    Unknown {
+        ty: u8,
+        data: Vec<u8>,
+    },
 }
 
 impl Event {
@@ -123,7 +131,10 @@ impl Event {
     /// client did not expect. `Unknown` surfaces the raw bytes instead.
     pub fn decode(body: &[u8]) -> Result<Self, CodecError> {
         let (&cmd, data) = body.split_first().ok_or(CodecError::EmptyBody)?;
-        let unknown = || Self::Unknown { ty: cmd, data: data.to_vec() };
+        let unknown = || Self::Unknown {
+            ty: cmd,
+            data: data.to_vec(),
+        };
         // The five boolean-flag commands all decode the same one-byte
         // shape; `make` is which variant to wrap the bit in.
         let flag = |make: fn(bool) -> Self| match data {
@@ -216,7 +227,9 @@ pub fn decode_diagnostic(payload: &[u8]) -> Option<Vec<(String, u32)>> {
         return None;
     }
     let pairs = &payload[HEADER_LEN..];
-    if !pairs.len().is_multiple_of(PAIR_LEN) {
+    // `%` rather than `is_multiple_of`, which is only stable since 1.87
+    // and would raise this crate's minimum Rust for no gain.
+    if pairs.len() % PAIR_LEN != 0 {
         return None;
     }
 
@@ -229,7 +242,11 @@ pub fn decode_diagnostic(payload: &[u8]) -> Option<Vec<(String, u32)>> {
                 return None;
             }
             let tag = String::from_utf8(tag.to_vec()).expect("checked printable ASCII above");
-            let value = u32::from_le_bytes(value.try_into().expect("chunk is PAIR_LEN, value half is 4 bytes"));
+            let value = u32::from_le_bytes(
+                value
+                    .try_into()
+                    .expect("chunk is PAIR_LEN, value half is 4 bytes"),
+            );
             Some((tag, value))
         })
         .collect()
@@ -248,7 +265,8 @@ mod diagnostic_tests {
     fn decodes_the_worked_example_from_a_real_capture() {
         // Real device capture, verbatim: 20-byte header then four pairs.
         let payload: Vec<u8> = vec![
-            255, 2, 0, 0, 172, 56, 0, 0, 192, 111, 65, 4, 0, 0, 0, 0, 157, 47, 54, 3, // header
+            255, 2, 0, 0, 172, 56, 0, 0, 192, 111, 65, 4, 0, 0, 0, 0, 157, 47, 54,
+            3, // header
             117, 100, 112, 115, 186, 236, 7, 3, // udps = 50851002
             114, 116, 84, 0, 249, 9, 4, 0, // rtT\0 = 264697
             112, 112, 84, 0, 52, 211, 11, 0, // ppT\0 = 774964
@@ -275,7 +293,10 @@ mod diagnostic_tests {
         payload.extend_from_slice(b"Tmr ");
         payload.extend_from_slice(&8u32.to_le_bytes());
         let decoded = decode_diagnostic(&payload).unwrap();
-        assert_eq!(decoded, vec![("IDLE".to_string(), 7), ("Tmr ".to_string(), 8)]);
+        assert_eq!(
+            decoded,
+            vec![("IDLE".to_string(), 7), ("Tmr ".to_string(), 8)]
+        );
     }
 
     #[test]
@@ -325,8 +346,14 @@ mod tests {
 
     #[test]
     fn decodes_temperatures_discarding_hundredths() {
-        assert_eq!(Event::decode(&[20, 93, 50]).unwrap(), Event::CurrentTemperature(93));
-        assert_eq!(Event::decode(&[2, 80, 0]).unwrap(), Event::TargetTemperature(80));
+        assert_eq!(
+            Event::decode(&[20, 93, 50]).unwrap(),
+            Event::CurrentTemperature(93)
+        );
+        assert_eq!(
+            Event::decode(&[2, 80, 0]).unwrap(),
+            Event::TargetTemperature(80)
+        );
     }
 
     #[test]
@@ -334,7 +361,10 @@ mod tests {
         assert_eq!(Event::decode(&[7, 0]).unwrap(), Event::Error(false));
         assert_eq!(Event::decode(&[28, 1]).unwrap(), Event::Backlight(true));
         assert_eq!(Event::decode(&[30, 1]).unwrap(), Event::ChildLock(true));
-        assert_eq!(Event::decode(&[133, 0]).unwrap(), Event::AccessControl(false));
+        assert_eq!(
+            Event::decode(&[133, 0]).unwrap(),
+            Event::AccessControl(false)
+        );
     }
 
     #[test]
@@ -356,14 +386,25 @@ mod tests {
         let body = [0u8, 0x02, 0x00, 0x01, 0x04, 0x00, 0xAA, 0xBB];
         assert_eq!(
             Event::decode(&body).unwrap(),
-            Event::HandshakeResponse { protocol: 2, fw_major: 1, fw_minor: 4, mode: 0 }
+            Event::HandshakeResponse {
+                protocol: 2,
+                fw_major: 1,
+                fw_minor: 4,
+                mode: 0
+            }
         );
     }
 
     #[test]
     fn decodes_hardware_and_diagnostics() {
-        assert_eq!(Event::decode(&[143, 1, 1, 1]).unwrap(), Event::Hardware([1, 1, 1]));
-        assert_eq!(Event::decode(&[145, 9, 9]).unwrap(), Event::Diagnostic(vec![9, 9]));
+        assert_eq!(
+            Event::decode(&[143, 1, 1, 1]).unwrap(),
+            Event::Hardware([1, 1, 1])
+        );
+        assert_eq!(
+            Event::decode(&[145, 9, 9]).unwrap(),
+            Event::Diagnostic(vec![9, 9])
+        );
         assert_eq!(Event::decode(&[255]).unwrap(), Event::Ping);
     }
 
@@ -373,7 +414,10 @@ mod tests {
         // them matters more than understanding them.
         assert_eq!(
             Event::decode(&[77, 1, 2, 3]).unwrap(),
-            Event::Unknown { ty: 77, data: vec![1, 2, 3] }
+            Event::Unknown {
+                ty: 77,
+                data: vec![1, 2, 3]
+            }
         );
     }
 
@@ -388,7 +432,13 @@ mod tests {
     // operator. An empty body is different in kind -- there is no command
     // type byte to even look at -- and stays a hard error.
     fn a_known_command_with_the_wrong_length_degrades_to_unknown_instead_of_failing() {
-        assert_eq!(Event::decode(&[20, 93]).unwrap(), Event::Unknown { ty: 20, data: vec![93] });
+        assert_eq!(
+            Event::decode(&[20, 93]).unwrap(),
+            Event::Unknown {
+                ty: 20,
+                data: vec![93]
+            }
+        );
         assert!(matches!(Event::decode(&[]), Err(CodecError::EmptyBody)));
     }
 }

@@ -36,7 +36,12 @@ mod support {
     /// but the test's outcome must not depend on whether a real kettle
     /// happens to be reachable. A MAC no real device could ever advertise
     /// removes that dependency instead of merely making it unlikely.
-    pub fn config_with_mac(addr: std::net::SocketAddr, public_key: &str, token: &str, mac: &str) -> PathBuf {
+    pub fn config_with_mac(
+        addr: std::net::SocketAddr,
+        public_key: &str,
+        token: &str,
+        mac: &str,
+    ) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("d3home-cli-{}-{}", std::process::id(), addr.port()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -77,7 +82,9 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-const TOKEN: [u8; 16] = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
+const TOKEN: [u8; 16] = [
+    0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF,
+];
 
 #[test]
 fn starts_the_kettle_at_a_chosen_temperature() {
@@ -86,7 +93,13 @@ fn starts_the_kettle_at_a_chosen_temperature() {
 
     Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "kettle", "start", "80"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "kettle",
+            "start",
+            "80",
+        ])
         .assert()
         .success();
 
@@ -111,13 +124,22 @@ fn a_partial_start_failure_leaves_the_kettle_off_not_heating() {
 
     Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "kettle", "start", "60"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "kettle",
+            "start",
+            "60",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .assert()
         .code(5);
 
     let state = handle.state();
-    assert_eq!(state.target, 60, "the target must still have been set -- that command was acked");
+    assert_eq!(
+        state.target, 60,
+        "the target must still have been set -- that command was acked"
+    );
     assert_ne!(
         state.mode,
         syncleo::codec::command::PowerMode::Custom,
@@ -149,7 +171,13 @@ fn watch_exits_cleanly_instead_of_panicking_when_its_output_pipe_is_closed() {
 
     let mut child = std::process::Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "watch"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--json",
+            "kettle",
+            "watch",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -171,7 +199,10 @@ fn watch_exits_cleanly_instead_of_panicking_when_its_output_pipe_is_closed() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("panicked"), "watch must not panic on a broken output pipe: {stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "watch must not panic on a broken output pipe: {stderr}"
+    );
 
     handle.shutdown();
 }
@@ -220,7 +251,13 @@ fn the_device_flag_is_equivalent_to_the_positional_device_word() {
 
     Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "--device", "kettle", "start"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--device",
+            "kettle",
+            "start",
+        ])
         .assert()
         .success();
 
@@ -248,7 +285,13 @@ fn watch_streams_events_as_they_arrive() {
     // rather than only buffered until exit.
     let mut child = std::process::Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "watch"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--json",
+            "kettle",
+            "watch",
+        ])
         .stdout(Stdio::piped())
         .spawn()
         .expect("d3home watch should spawn");
@@ -309,7 +352,11 @@ fn watch_burst_lines(handle: &syncleo::simulator::KettleHandle, json_flag: &[&st
     burst_lines(handle, json_flag, "watch")
 }
 
-fn burst_lines(handle: &syncleo::simulator::KettleHandle, json_flag: &[&str], action: &str) -> Vec<String> {
+fn burst_lines(
+    handle: &syncleo::simulator::KettleHandle,
+    json_flag: &[&str],
+    action: &str,
+) -> Vec<String> {
     use assert_cmd::prelude::*;
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
@@ -365,8 +412,14 @@ fn trace_shows_every_report_with_its_protocol_code() {
         joined.contains("diagnostic: udps=1 IDLE=2 Tmr=3 rtT=4"),
         "expected the decoded diagnostic line, got: {joined}"
     );
-    assert!(joined.contains("hardware: 1.1.4"), "expected hardware as 1.1.4, got: {joined}");
-    assert!(joined.contains("145"), "the protocol code is the point of trace: {joined}");
+    assert!(
+        joined.contains("hardware: 1.1.4"),
+        "expected hardware as 1.1.4, got: {joined}"
+    );
+    assert!(
+        joined.contains("145"),
+        "the protocol code is the point of trace: {joined}"
+    );
 }
 
 #[test]
@@ -379,9 +432,18 @@ fn human_watch_keeps_the_protocol_chatter_out_of_the_way() {
     handle.shutdown();
 
     let joined = lines.join("\n");
-    assert!(!joined.contains("diagnostic"), "diagnostics belong in trace: {joined}");
-    assert!(!joined.contains("access control"), "access control belongs in trace: {joined}");
-    assert!(!joined.contains("hardware"), "hardware belongs in trace: {joined}");
+    assert!(
+        !joined.contains("diagnostic"),
+        "diagnostics belong in trace: {joined}"
+    );
+    assert!(
+        !joined.contains("access control"),
+        "access control belongs in trace: {joined}"
+    );
+    assert!(
+        !joined.contains("hardware"),
+        "hardware belongs in trace: {joined}"
+    );
     assert!(
         joined.contains("connected"),
         "watch should say what it attached to, got: {joined}"
@@ -399,14 +461,21 @@ fn json_watch_output_still_carries_the_raw_diagnostic_event() {
 
     assert!(!lines.is_empty(), "watch printed no lines at all");
     let joined = lines.join("\n");
-    assert!(joined.contains("diagnostic"), "json watch output lost the diagnostic event: {joined}");
+    assert!(
+        joined.contains("diagnostic"),
+        "json watch output lost the diagnostic event: {joined}"
+    );
 
     let diagnostic_line = lines
         .iter()
         .find(|l| l.contains("\"diagnostic\""))
         .unwrap_or_else(|| panic!("no diagnostic event in: {joined}"));
-    let value: serde_json::Value = serde_json::from_str(diagnostic_line).expect("diagnostic line is json");
-    assert!(value["diagnostic"].is_array(), "raw diagnostic bytes missing: {value}");
+    let value: serde_json::Value =
+        serde_json::from_str(diagnostic_line).expect("diagnostic line is json");
+    assert!(
+        value["diagnostic"].is_array(),
+        "raw diagnostic bytes missing: {value}"
+    );
     assert_eq!(
         value["diagnostic_decoded"],
         serde_json::json!([
@@ -421,7 +490,8 @@ fn json_watch_output_still_carries_the_raw_diagnostic_event() {
         .iter()
         .find(|l| l.contains("hardware"))
         .unwrap_or_else(|| panic!("no hardware event in: {joined}"));
-    let value: serde_json::Value = serde_json::from_str(hardware_line).expect("hardware line is json");
+    let value: serde_json::Value =
+        serde_json::from_str(hardware_line).expect("hardware line is json");
     assert_eq!(value["hardware"], serde_json::json!([1, 1, 4]));
 }
 
@@ -432,7 +502,13 @@ fn status_reports_machine_readable_state() {
 
     let output = Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "status"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--json",
+            "kettle",
+            "status",
+        ])
         .assert()
         .success()
         .get_output()
@@ -488,8 +564,12 @@ fn status_against_an_absent_device_fails_rather_than_waiting() {
     // exactly as it does for any command, and that comes back
     // `NotFound` -- not `watch`-style waiting.
     let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
-    let config =
-        support::config_with_mac(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN), "d3d3d3d3d3d3");
+    let config = support::config_with_mac(
+        handle.addr,
+        &hex(&handle.public_wire),
+        &hex(&TOKEN),
+        "d3d3d3d3d3d3",
+    );
     handle.shutdown();
 
     Command::cargo_bin("d3home")
@@ -528,7 +608,13 @@ fn watch_reconnects_after_the_device_goes_silent_and_returns() {
 
     let mut child = std::process::Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "watch"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--json",
+            "kettle",
+            "watch",
+        ])
         .stdout(Stdio::piped())
         .spawn()
         .expect("d3home watch should spawn");
@@ -568,7 +654,10 @@ fn watch_reconnects_after_the_device_goes_silent_and_returns() {
     let _ = child.wait();
     handle.shutdown();
 
-    assert!(!after.is_empty(), "no events reached the output after the device came back");
+    assert!(
+        !after.is_empty(),
+        "no events reached the output after the device came back"
+    );
     let joined = after.join("\n");
     assert!(
         joined.contains(r#""reconnected":true"#),
@@ -596,7 +685,10 @@ fn human_status_output_has_no_volume_row() {
         .clone();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.to_lowercase().contains("volume"), "human status output still mentions volume: {stdout}");
+    assert!(
+        !stdout.to_lowercase().contains("volume"),
+        "human status output still mentions volume: {stdout}"
+    );
 
     handle.shutdown();
 }
@@ -612,7 +704,13 @@ fn json_status_output_still_carries_volume() {
 
     let output = Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "status"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--json",
+            "kettle",
+            "status",
+        ])
         .assert()
         .success()
         .get_output()
@@ -620,7 +718,10 @@ fn json_status_output_still_carries_volume() {
 
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout is valid json");
-    assert_eq!(value["volume"], 42, "the simulator's default volume byte should still be reported");
+    assert_eq!(
+        value["volume"], 42,
+        "the simulator's default volume byte should still be reported"
+    );
 
     handle.shutdown();
 }
@@ -661,7 +762,13 @@ fn a_temperature_outside_the_supported_range_is_a_usage_error() {
 
     Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "kettle", "start", "250"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "kettle",
+            "start",
+            "250",
+        ])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("30"));
@@ -681,7 +788,13 @@ fn a_device_nak_exits_with_the_device_error_code() {
 
     Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "kettle", "start", "80"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "kettle",
+            "start",
+            "80",
+        ])
         .assert()
         .code(6);
 
@@ -723,17 +836,29 @@ fn alias_add_and_remove_survive_a_reload() {
     let config = support::config_with(handle.addr, &hex(&handle.public_wire), &hex(&TOKEN));
     let path = config.to_str().unwrap();
 
-    Command::cargo_bin("d3home").unwrap()
-        .args(["--config", path, "alias", "add", "чай", "kettle"]).assert().success();
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "alias", "add", "чай", "kettle"])
+        .assert()
+        .success();
 
-    Command::cargo_bin("d3home").unwrap()
-        .args(["--config", path, "чай", "start"]).assert().success();
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "чай", "start"])
+        .assert()
+        .success();
 
-    Command::cargo_bin("d3home").unwrap()
-        .args(["--config", path, "alias", "rm", "чай"]).assert().success();
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "alias", "rm", "чай"])
+        .assert()
+        .success();
 
-    Command::cargo_bin("d3home").unwrap()
-        .args(["--config", path, "чай", "start"]).assert().code(2);
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path, "чай", "start"])
+        .assert()
+        .code(2);
 
     handle.shutdown();
 }
@@ -745,7 +870,14 @@ fn refuses_to_create_an_alias_that_shadows_a_builtin() {
 
     Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "alias", "add", "discover", "kettle"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "alias",
+            "add",
+            "discover",
+            "kettle",
+        ])
         .assert()
         .code(2);
 
@@ -941,8 +1073,15 @@ fn add_creates_the_registry_when_there_is_none_yet() {
     use std::os::unix::fs::PermissionsExt;
     let mode = std::fs::metadata(&path).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600, "the registry holds a token");
-    let dir_mode = std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode();
-    assert_eq!(dir_mode & 0o777, 0o700, "so should the directory we created for it");
+    let dir_mode = std::fs::metadata(path.parent().unwrap())
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(
+        dir_mode & 0o777,
+        0o700,
+        "so should the directory we created for it"
+    );
 
     // And it is immediately usable, with the model carried over from the link.
     Command::cargo_bin("d3home")
@@ -976,7 +1115,11 @@ fn add_refuses_a_second_device_with_the_same_name() {
         "deadbeefdeadbeefdeadbeefdeadbeef",
     ];
 
-    Command::cargo_bin("d3home").unwrap().args(args).assert().success();
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(args)
+        .assert()
+        .success();
     Command::cargo_bin("d3home")
         .unwrap()
         .args(args)
@@ -1022,12 +1165,19 @@ fn under_json_a_failure_is_machine_readable_on_stderr() {
     let output = assert.get_output();
 
     assert!(output.stdout.is_empty(), "an error must not pollute stdout");
-    let value: serde_json::Value = serde_json::from_slice(&output.stderr)
-        .unwrap_or_else(|_| panic!("stderr is not json: {}", String::from_utf8_lossy(&output.stderr)));
+    let value: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap_or_else(|_| {
+        panic!(
+            "stderr is not json: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
     assert_eq!(value["error"]["kind"], "usage");
     assert_eq!(value["error"]["exit_code"], 2);
     assert!(
-        value["error"]["message"].as_str().unwrap().contains("teapot"),
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("teapot"),
         "the message should name what could not be found: {value}"
     );
 
@@ -1043,7 +1193,13 @@ fn the_error_kind_distinguishes_a_wrong_token_from_a_missing_device() {
 
     let assert = Command::cargo_bin("d3home")
         .unwrap()
-        .args(["--config", config.to_str().unwrap(), "--json", "kettle", "status"])
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--json",
+            "kettle",
+            "status",
+        ])
         .assert()
         .code(4);
     let value: serde_json::Value = serde_json::from_slice(&assert.get_output().stderr).unwrap();
@@ -1088,7 +1244,10 @@ fn under_json_every_stderr_line_is_json_too() {
         .success();
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
 
-    assert!(stderr.contains("warning"), "expected the permission warning, got: {stderr:?}");
+    assert!(
+        stderr.contains("warning"),
+        "expected the permission warning, got: {stderr:?}"
+    );
     for line in stderr.lines().filter(|l| !l.trim().is_empty()) {
         serde_json::from_str::<serde_json::Value>(line)
             .unwrap_or_else(|_| panic!("stderr line is not json: {line:?}"));
@@ -1099,7 +1258,8 @@ fn under_json_every_stderr_line_is_json_too() {
 
 #[test]
 fn add_confirms_itself_in_whichever_shape_was_asked_for() {
-    let dir = std::env::temp_dir().join(format!("d3home-addjson-{}-{}", std::process::id(), line!()));
+    let dir =
+        std::env::temp_dir().join(format!("d3home-addjson-{}-{}", std::process::id(), line!()));
     let path = dir.join("devices.toml");
     std::fs::remove_dir_all(&dir).ok();
 
@@ -1115,7 +1275,11 @@ fn add_confirms_itself_in_whichever_shape_was_asked_for() {
         "--token",
         "deadbeefdeadbeefdeadbeefdeadbeef",
     ];
-    let assert = Command::cargo_bin("d3home").unwrap().args(args).assert().success();
+    let assert = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(args)
+        .assert()
+        .success();
     let value: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout).unwrap();
     assert_eq!(value["device"], "kettle");
 
@@ -1158,7 +1322,8 @@ fn devices_identifies_each_entry_without_showing_any_of_the_token() {
     // The MAC is the identifier worth printing: already broadcast over mDNS,
     // and the thing a router's admin page shows. A slice of the token would
     // be a secret leaking one habit at a time.
-    let dir = std::env::temp_dir().join(format!("d3home-devlist-{}-{}", std::process::id(), line!()));
+    let dir =
+        std::env::temp_dir().join(format!("d3home-devlist-{}-{}", std::process::id(), line!()));
     let path = dir.join("devices.toml");
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).unwrap();
@@ -1186,11 +1351,26 @@ fn devices_identifies_each_entry_without_showing_any_of_the_token() {
         .clone();
     let listing = String::from_utf8(out).unwrap();
 
-    for expected in ["kettle", "k", "PWK 1725CGLD", "syncleo", "de:ad:be:ef:de:ad"] {
-        assert!(listing.contains(expected), "{expected} missing from:\n{listing}");
+    for expected in [
+        "kettle",
+        "k",
+        "PWK 1725CGLD",
+        "syncleo",
+        "de:ad:be:ef:de:ad",
+    ] {
+        assert!(
+            listing.contains(expected),
+            "{expected} missing from:\n{listing}"
+        );
     }
-    assert!(!listing.contains(token), "the token appeared in the listing:\n{listing}");
-    assert!(!listing.contains(&token[..8]), "part of the token appeared:\n{listing}");
+    assert!(
+        !listing.contains(token),
+        "the token appeared in the listing:\n{listing}"
+    );
+    assert!(
+        !listing.contains(&token[..8]),
+        "part of the token appeared:\n{listing}"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

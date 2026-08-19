@@ -75,7 +75,10 @@ mod tests {
         "21d4043d930c3d75140c158c3406257204670512254e6e145eae239f354bdb57";
 
     fn unhex(s: &str) -> Vec<u8> {
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]
@@ -91,7 +94,13 @@ mod tests {
         let device: [u8; 32] = unhex(DEVICE_PUBLIC_WIRE).try_into().unwrap();
         let keys = derive(&OUR_PRIVATE, &device);
 
-        assert_eq!(keys.inkey.to_vec(), unhex("3ec02e08f3f3bea4dacc8179f46f493d"));
-        assert_eq!(keys.outkey.to_vec(), unhex("8c6715bf7555d1e7e0032db0a7d3da76"));
+        assert_eq!(
+            keys.inkey.to_vec(),
+            unhex("3ec02e08f3f3bea4dacc8179f46f493d")
+        );
+        assert_eq!(
+            keys.outkey.to_vec(),
+            unhex("8c6715bf7555d1e7e0032db0a7d3da76")
+        );
     }
 }

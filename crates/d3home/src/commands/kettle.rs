@@ -66,16 +66,23 @@ const WATCH_RECONNECT_BACKOFF_CEILING: Duration = Duration::from_secs(5);
 /// the command line, unexamined until now. `config_path` is threaded down
 /// to `connect` so a freshly discovered endpoint can be cached back into
 /// the registry.
-pub fn run(device: &Device, action: &[String], json: bool, config_path: &Path) -> Result<(), AppError> {
-    let (verb, rest) = action
-        .split_first()
-        .ok_or_else(|| AppError::Usage("missing action; try status, start, set, off, watch, or trace".into()))?;
+pub fn run(
+    device: &Device,
+    action: &[String],
+    json: bool,
+    config_path: &Path,
+) -> Result<(), AppError> {
+    let (verb, rest) = action.split_first().ok_or_else(|| {
+        AppError::Usage("missing action; try status, start, set, off, watch, or trace".into())
+    })?;
 
     // No kettle action takes an option of its own, so anything option-shaped
     // that survived global parsing is a typo -- and a typo silently read as
     // a temperature or ignored is worse than a refusal.
     if let Some(bad) = rest.iter().find(|w| w.starts_with("--")) {
-        return Err(AppError::Usage(format!("unknown option '{bad}'; try 'd3home help'")));
+        return Err(AppError::Usage(format!(
+            "unknown option '{bad}'; try 'd3home help'"
+        )));
     }
 
     match verb.as_str() {
@@ -106,7 +113,10 @@ fn status(device: &Device, json: bool, config_path: &Path) -> Result<(), AppErro
     // tell "couldn't reach the kettle" apart from "reached it, and it says
     // something is wrong."
     if state.error == Some(true) {
-        return Err(AppError::Device(format!("device '{}' reports an error", device.name)));
+        return Err(AppError::Device(format!(
+            "device '{}' reports an error",
+            device.name
+        )));
     }
     Ok(())
 }
@@ -132,7 +142,9 @@ fn start(device: &Device, args: &[String], json: bool, config_path: &Path) -> Re
         return Err(refused(device, "start"));
     }
     output::print_heating_started(
-        state.target_temperature.unwrap_or_else(|| target.unwrap_or(BOIL_TEMPERATURE)),
+        state
+            .target_temperature
+            .unwrap_or_else(|| target.unwrap_or(BOIL_TEMPERATURE)),
         json,
     );
     Ok(())
@@ -184,9 +196,8 @@ fn send_custom_target(client: &mut Client, temperature: u8) -> Result<(), syncle
 /// same reasoning that made `start N` send the target first applies here by
 /// construction, since there is no second command to leave half-applied.
 fn set(device: &Device, args: &[String], json: bool, config_path: &Path) -> Result<(), AppError> {
-    let target = parse_target_temperature(args)?.ok_or_else(|| {
-        AppError::Usage("usage: d3home <device> set <temperature>".into())
-    })?;
+    let target = parse_target_temperature(args)?
+        .ok_or_else(|| AppError::Usage("usage: d3home <device> set <temperature>".into()))?;
 
     let mut client = connect(device, config_path)?;
     with_spinner(Phase::Sending, || -> Result<(), AppError> {
@@ -231,7 +242,9 @@ fn refused(device: &Device, what: &str) -> AppError {
 
 fn off(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
     let mut client = connect(device, config_path)?;
-    with_spinner(Phase::Sending, || client.send(Command::Mode(PowerMode::Off)))?;
+    with_spinner(Phase::Sending, || {
+        client.send(Command::Mode(PowerMode::Off))
+    })?;
 
     let state = read_back(&mut client)?;
     if matches!(state.mode, Some(PowerMode::On) | Some(PowerMode::Custom)) {
@@ -283,7 +296,11 @@ fn trace(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError
 
 /// Hold a session open and feed everything it reports to `sink`, reconnecting
 /// for as long as the failures are ones that reconnecting can fix.
-fn stream(device: &Device, config_path: &Path, sink: &mut dyn output::EventSink) -> Result<(), AppError> {
+fn stream(
+    device: &Device,
+    config_path: &Path,
+    sink: &mut dyn output::EventSink,
+) -> Result<(), AppError> {
     // Owned, not borrowed: see the loop below -- every reconnect updates
     // this with whatever endpoint actually worked, so the *next* reconnect
     // tries that one first instead of the address `watch` started with.
@@ -319,7 +336,9 @@ fn stream(device: &Device, config_path: &Path, sink: &mut dyn output::EventSink)
         if quit.requested() {
             return Ok(());
         }
-        output::print_warning(&format!("kettle went away ({err}); waiting for it to come back"));
+        output::print_warning(&format!(
+            "kettle went away ({err}); waiting for it to come back"
+        ));
         // Finding 8: `connect_with` returns the `Cached` endpoint that
         // actually worked -- whether that was the one already cached or
         // one just found by discovery -- specifically so this can be
@@ -366,7 +385,9 @@ fn stream(device: &Device, config_path: &Path, sink: &mut dyn output::EventSink)
 fn is_connectivity_failure(err: &AppError) -> bool {
     match err {
         AppError::Timeout(_) | AppError::NotFound(_) => true,
-        AppError::Usage(_) | AppError::BadToken | AppError::Device(_) | AppError::Internal(_) => false,
+        AppError::Usage(_) | AppError::BadToken | AppError::Device(_) | AppError::Internal(_) => {
+            false
+        }
     }
 }
 
@@ -401,9 +422,9 @@ fn parse_target_temperature(args: &[String]) -> Result<Option<u8>, AppError> {
     match args {
         [] => Ok(None),
         [temperature] => {
-            let value: u8 = temperature
-                .parse()
-                .map_err(|_| AppError::Usage(format!("'{temperature}' is not a valid temperature")))?;
+            let value: u8 = temperature.parse().map_err(|_| {
+                AppError::Usage(format!("'{temperature}' is not a valid temperature"))
+            })?;
             if !(MIN_TEMPERATURE..=MAX_TEMPERATURE).contains(&value) {
                 return Err(AppError::Usage(format!(
                     "temperature must be between {MIN_TEMPERATURE} and {MAX_TEMPERATURE} degrees C, got {value}"
@@ -411,7 +432,9 @@ fn parse_target_temperature(args: &[String]) -> Result<Option<u8>, AppError> {
             }
             Ok(Some(value))
         }
-        _ => Err(AppError::Usage("usage: d3home <device> start [temperature]".into())),
+        _ => Err(AppError::Usage(
+            "usage: d3home <device> start [temperature]".into(),
+        )),
     }
 }
 
@@ -492,8 +515,10 @@ fn connect_with<D: Discovery>(
     // `SocketAddr::new`, so a link-local IPv6 destination is never handed
     // to the socket without its scope id.
     let addr = socket_addr(found.address, found.port, found.interface.as_deref())?;
-    let client =
-        with_spinner(Phase::Connecting, || try_connect(addr, found.public_wire, token)).map_err(AppError::from)?;
+    let client = with_spinner(Phase::Connecting, || {
+        try_connect(addr, found.public_wire, token)
+    })
+    .map_err(AppError::from)?;
     let cached = Cached {
         address: found.address,
         port: found.port,
@@ -581,7 +606,9 @@ fn evaluate_cached_attempt(result: Result<Client, syncleo::Error>) -> CachedAtte
         // are both what a stale cached endpoint looks like from here --
         // neither means the device itself rejected anything, so both are
         // worth a fresh discovery scan rather than a permanent failure.
-        Err(syncleo::Error::Timeout) | Err(syncleo::Error::Io(_)) => CachedAttempt::StaleFallBackToDiscovery,
+        Err(syncleo::Error::Timeout) | Err(syncleo::Error::Io(_)) => {
+            CachedAttempt::StaleFallBackToDiscovery
+        }
         Err(other) => CachedAttempt::Failed(other.into()),
     }
 }
@@ -596,7 +623,13 @@ fn try_connect(
     // side's private key to be stable across runs, and generating one lets
     // the CLI stay stateless between invocations.
     let our_private = rand::random::<[u8; 32]>();
-    Client::connect(Box::new(transport), our_private, public_wire, token, CONNECT_TIMEOUT)
+    Client::connect(
+        Box::new(transport),
+        our_private,
+        public_wire,
+        token,
+        CONNECT_TIMEOUT,
+    )
 }
 
 /// Locate `device` on the network by its MAC address, via whichever
@@ -647,7 +680,14 @@ fn cache_endpoint(
     public_wire: [u8; 32],
     interface: Option<String>,
 ) {
-    if let Err(err) = try_cache_endpoint(config_path, device_name, address, port, public_wire, interface) {
+    if let Err(err) = try_cache_endpoint(
+        config_path,
+        device_name,
+        address,
+        port,
+        public_wire,
+        interface,
+    ) {
         crate::output::print_warning(&format!(
             "could not cache the discovered endpoint for '{device_name}': {err}"
         ));
@@ -667,8 +707,15 @@ fn try_cache_endpoint(
         .devices
         .iter_mut()
         .find(|d| d.name == device_name)
-        .ok_or_else(|| ConfigError::UnknownDevice { name: device_name.to_string() })?;
-    device.cached = Some(Cached { address, port, public_key: hex_encode(&public_wire), interface });
+        .ok_or_else(|| ConfigError::UnknownDevice {
+            name: device_name.to_string(),
+        })?;
+    device.cached = Some(Cached {
+        address,
+        port,
+        public_key: hex_encode(&public_wire),
+        interface,
+    });
     config.save(config_path)?;
     Ok(())
 }
@@ -678,8 +725,11 @@ fn decode_public_key(hex: &str, device_name: &str) -> Result<[u8; 32], AppError>
     // directly (`&hex[i * 2..i * 2 + 2]`), which panics if the string is
     // the right *byte* length but contains a multi-byte character at an
     // even offset -- the identical bug already fixed for `token_bytes`.
-    hex_decode::<32>(hex)
-        .ok_or_else(|| AppError::Usage(format!("device '{device_name}' has a malformed cached public key")))
+    hex_decode::<32>(hex).ok_or_else(|| {
+        AppError::Usage(format!(
+            "device '{device_name}' has a malformed cached public key"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -693,9 +743,18 @@ mod tests {
 
     #[test]
     fn start_with_a_temperature_in_range_is_accepted() {
-        assert_eq!(parse_target_temperature(&["80".to_string()]).unwrap(), Some(80));
-        assert_eq!(parse_target_temperature(&["30".to_string()]).unwrap(), Some(30));
-        assert_eq!(parse_target_temperature(&["100".to_string()]).unwrap(), Some(100));
+        assert_eq!(
+            parse_target_temperature(&["80".to_string()]).unwrap(),
+            Some(80)
+        );
+        assert_eq!(
+            parse_target_temperature(&["30".to_string()]).unwrap(),
+            Some(30)
+        );
+        assert_eq!(
+            parse_target_temperature(&["100".to_string()]).unwrap(),
+            Some(100)
+        );
     }
 
     #[test]
@@ -703,7 +762,10 @@ mod tests {
         // The vendor app only *offers* multiples of five; nothing says the
         // device itself enforces that step. Rejecting 83 client-side would
         // be a guess this project has no evidence for.
-        assert_eq!(parse_target_temperature(&["83".to_string()]).unwrap(), Some(83));
+        assert_eq!(
+            parse_target_temperature(&["83".to_string()]).unwrap(),
+            Some(83)
+        );
     }
 
     #[test]
@@ -732,11 +794,23 @@ mod tests {
         // (the mac, and the off-base/unpowered hint) survives a future
         // rewording, not the exact sentence.
         let message = not_found_message("kettle", "deadbeefdead");
-        assert!(message.contains("deadbeefdead"), "mac missing from: {message}");
-        assert!(message.contains("kettle"), "device name missing from: {message}");
+        assert!(
+            message.contains("deadbeefdead"),
+            "mac missing from: {message}"
+        );
+        assert!(
+            message.contains("kettle"),
+            "device name missing from: {message}"
+        );
         let lower = message.to_lowercase();
-        assert!(lower.contains("base"), "off-base hint missing from: {message}");
-        assert!(lower.contains("unpowered") || lower.contains("power"), "power hint missing from: {message}");
+        assert!(
+            lower.contains("base"),
+            "off-base hint missing from: {message}"
+        );
+        assert!(
+            lower.contains("unpowered") || lower.contains("power"),
+            "power hint missing from: {message}"
+        );
     }
 
     #[test]
@@ -758,7 +832,11 @@ mod tests {
         // `hex.len() != 64` guard passed, but slicing into it panicked
         // mid-character.
         let hex = "€".repeat(21) + "a";
-        assert_eq!(hex.len(), 64, "fixture must be exactly 64 bytes to reach the old guard");
+        assert_eq!(
+            hex.len(),
+            64,
+            "fixture must be exactly 64 bytes to reach the old guard"
+        );
 
         let err = decode_public_key(&hex, "kettle").unwrap_err();
         assert_eq!(err.exit_code(), crate::cli::ExitCode::Usage);
@@ -780,7 +858,9 @@ mod tests {
         // would silently mask the real problem behind a slow, confusing
         // retry that was always going to fail the same way.
         match evaluate_cached_attempt(Err(syncleo::Error::HandshakeRejected)) {
-            CachedAttempt::Failed(err) => assert_eq!(err.exit_code(), crate::cli::ExitCode::BadToken),
+            CachedAttempt::Failed(err) => {
+                assert_eq!(err.exit_code(), crate::cli::ExitCode::BadToken)
+            }
             CachedAttempt::StaleFallBackToDiscovery => {
                 panic!("a rejected handshake must not fall back to discovery")
             }
@@ -810,7 +890,9 @@ mod tests {
         // with no fallback, even though this is exactly the "stale cached
         // endpoint" case discovery exists to repair.
         assert!(matches!(
-            evaluate_cached_attempt(Err(syncleo::Error::Io(std::io::Error::other("no such device")))),
+            evaluate_cached_attempt(Err(syncleo::Error::Io(std::io::Error::other(
+                "no such device"
+            )))),
             CachedAttempt::StaleFallBackToDiscovery
         ));
     }
@@ -838,12 +920,15 @@ mod tests {
         // to discovery (here: a fake one, pointing at a real simulator on
         // loopback) rather than dying as a permanent internal error.
         const TOKEN: [u8; 16] = [
-            0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
+            0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad,
+            0xae, 0xaf,
         ];
         let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
 
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-stale-interface-fallback-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "d3home-test-stale-interface-fallback-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         std::fs::write(
@@ -871,14 +956,28 @@ mod tests {
             protocol: 2,
         };
 
-        let client = connect_with(device, &path, || Ok::<_, syncleo::Error>(FakeDiscovery(Some(found))));
-        assert!(client.is_ok(), "must fall back to the injected discovery and connect: {:?}", client.err());
+        let client = connect_with(device, &path, || {
+            Ok::<_, syncleo::Error>(FakeDiscovery(Some(found)))
+        });
+        assert!(
+            client.is_ok(),
+            "must fall back to the injected discovery and connect: {:?}",
+            client.err()
+        );
 
         let reloaded = Config::load(&path).unwrap();
-        let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("must re-cache on success");
+        let cached = reloaded
+            .resolve("kettle")
+            .unwrap()
+            .cached
+            .as_ref()
+            .expect("must re-cache on success");
         assert_eq!(cached.address, handle.addr.ip());
         assert_eq!(cached.port, handle.addr.port());
-        assert_eq!(cached.interface, None, "the freshly discovered endpoint needs no interface");
+        assert_eq!(
+            cached.interface, None,
+            "the freshly discovered endpoint needs no interface"
+        );
 
         handle.shutdown();
         std::fs::remove_dir_all(&dir).ok();
@@ -891,8 +990,10 @@ mod tests {
         // already knows how to wait through in `watch` -- not the stale
         // Internal/exit-1 error the cached endpoint alone used to produce.
         const TOKEN: [u8; 16] = [0xb0; 16];
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-stale-interface-no-discovery-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "d3home-test-stale-interface-no-discovery-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         std::fs::write(
@@ -910,8 +1011,10 @@ mod tests {
         let config = Config::load(&path).unwrap();
         let device = config.resolve("kettle").unwrap();
 
-        let err = connect_with(device, &path, || Ok::<FakeDiscovery, syncleo::Error>(FakeDiscovery(None)))
-            .expect_err("nothing was ever discoverable");
+        let err = connect_with(device, &path, || {
+            Ok::<FakeDiscovery, syncleo::Error>(FakeDiscovery(None))
+        })
+        .expect_err("nothing was ever discoverable");
         assert_eq!(err.exit_code(), crate::cli::ExitCode::NotFound);
 
         std::fs::remove_dir_all(&dir).ok();
@@ -933,8 +1036,8 @@ mod tests {
         const TOKEN: [u8; 16] = [0xc0; 16];
         let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
 
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-reused-cache-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("d3home-test-reused-cache-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         // Deliberately stale, exactly like the sibling tests above: the
@@ -964,9 +1067,10 @@ mod tests {
             protocol: 2,
         };
 
-        let (_client, cached) =
-            connect_with(&device, &path, || Ok::<_, syncleo::Error>(FakeDiscovery(Some(found))))
-                .expect("the first connect must fall back to discovery and succeed");
+        let (_client, cached) = connect_with(&device, &path, || {
+            Ok::<_, syncleo::Error>(FakeDiscovery(Some(found)))
+        })
+        .expect("the first connect must fall back to discovery and succeed");
         assert_eq!(
             cached.address,
             handle.addr.ip(),
@@ -980,7 +1084,9 @@ mod tests {
         // second connect is a pure cache hit against the freshly
         // discovered address, with no fallback needed at all.
         let discovery_must_not_be_called = || -> Result<FakeDiscovery, syncleo::Error> {
-            panic!("discovery must not be needed once the cache holds the freshly discovered endpoint")
+            panic!(
+                "discovery must not be needed once the cache holds the freshly discovered endpoint"
+            )
         };
         connect_with(&reconnected_device, &path, discovery_must_not_be_called)
             .expect("the freshly discovered endpoint alone must be enough to reconnect");
@@ -997,18 +1103,34 @@ mod tests {
 
     #[test]
     fn caching_a_discovered_endpoint_persists_address_port_and_public_key() {
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-cache-endpoint-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("d3home-test-cache-endpoint-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
-        std::fs::write(&path, sample_kettle_toml("deadbeefdeadbeefdeadbeefdeadbeef")).unwrap();
+        std::fs::write(
+            &path,
+            sample_kettle_toml("deadbeefdeadbeefdeadbeefdeadbeef"),
+        )
+        .unwrap();
 
         let public_wire = [0x77u8; 32];
-        try_cache_endpoint(&path, "kettle", "192.168.1.42".parse().unwrap(), 8888, public_wire, None)
-            .expect("caching a known device must succeed");
+        try_cache_endpoint(
+            &path,
+            "kettle",
+            "192.168.1.42".parse().unwrap(),
+            8888,
+            public_wire,
+            None,
+        )
+        .expect("caching a known device must succeed");
 
         let reloaded = Config::load(&path).unwrap();
-        let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("cache was written");
+        let cached = reloaded
+            .resolve("kettle")
+            .unwrap()
+            .cached
+            .as_ref()
+            .expect("cache was written");
         assert_eq!(cached.address, "192.168.1.42".parse::<IpAddr>().unwrap());
         assert_eq!(cached.port, 8888);
         assert_eq!(cached.public_key, hex_encode(&public_wire));
@@ -1023,11 +1145,17 @@ mod tests {
         // link-local IPv6 address; without the interface surviving the
         // cache round trip, the next `status` would hit EINVAL all over
         // again.
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-cache-endpoint-interface-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "d3home-test-cache-endpoint-interface-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
-        std::fs::write(&path, sample_kettle_toml("deadbeefdeadbeefdeadbeefdeadbeef")).unwrap();
+        std::fs::write(
+            &path,
+            sample_kettle_toml("deadbeefdeadbeefdeadbeefdeadbeef"),
+        )
+        .unwrap();
 
         try_cache_endpoint(
             &path,
@@ -1040,7 +1168,12 @@ mod tests {
         .expect("caching a known device must succeed");
 
         let reloaded = Config::load(&path).unwrap();
-        let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("cache was written");
+        let cached = reloaded
+            .resolve("kettle")
+            .unwrap()
+            .cached
+            .as_ref()
+            .expect("cache was written");
         assert_eq!(cached.interface.as_deref(), Some("enp8s0"));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -1048,11 +1181,17 @@ mod tests {
 
     #[test]
     fn caching_an_endpoint_for_an_unknown_device_is_reported() {
-        let dir = std::env::temp_dir()
-            .join(format!("d3home-test-cache-endpoint-unknown-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "d3home-test-cache-endpoint-unknown-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
-        std::fs::write(&path, sample_kettle_toml("deadbeefdeadbeefdeadbeefdeadbeef")).unwrap();
+        std::fs::write(
+            &path,
+            sample_kettle_toml("deadbeefdeadbeefdeadbeefdeadbeef"),
+        )
+        .unwrap();
 
         let result = try_cache_endpoint(
             &path,
@@ -1062,7 +1201,10 @@ mod tests {
             [0u8; 32],
             None,
         );
-        assert!(result.is_err(), "caching an endpoint for a device that isn't in the config must fail");
+        assert!(
+            result.is_err(),
+            "caching an endpoint for a device that isn't in the config must fail"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1083,8 +1225,14 @@ mod tests {
         let err = cached_socket_addr(&cached, "kettle").unwrap_err();
         assert_eq!(err.exit_code(), crate::cli::ExitCode::Usage);
         let message = err.to_string();
-        assert!(message.contains("kettle"), "error should name the device: {message}");
-        assert!(message.contains("interface"), "error should point at the fix: {message}");
+        assert!(
+            message.contains("kettle"),
+            "error should name the device: {message}"
+        );
+        assert!(
+            message.contains("interface"),
+            "error should point at the fix: {message}"
+        );
     }
 
     #[test]
@@ -1138,7 +1286,9 @@ mod tests {
         // token, a broken config, this process itself being wrong -- and
         // must end `watch` outright rather than feed the reconnect loop.
         assert!(!is_connectivity_failure(&AppError::BadToken));
-        assert!(!is_connectivity_failure(&AppError::Usage("bad config".into())));
+        assert!(!is_connectivity_failure(&AppError::Usage(
+            "bad config".into()
+        )));
         assert!(!is_connectivity_failure(&AppError::Device("nak".into())));
         assert!(!is_connectivity_failure(&AppError::Internal("bug".into())));
     }
@@ -1147,12 +1297,20 @@ mod tests {
     fn retry_with_backoff_returns_ok_immediately_on_the_first_success_without_sleeping() {
         let mut calls = 0;
         let mut sleeps: Vec<Duration> = Vec::new();
-        let result: Result<i32, AppError> =
-            retry_with_backoff(|| { calls += 1; Ok(42) }, |d| sleeps.push(d));
+        let result: Result<i32, AppError> = retry_with_backoff(
+            || {
+                calls += 1;
+                Ok(42)
+            },
+            |d| sleeps.push(d),
+        );
 
         assert_eq!(result.unwrap(), 42);
         assert_eq!(calls, 1);
-        assert!(sleeps.is_empty(), "a first-try success must never wait at all");
+        assert!(
+            sleeps.is_empty(),
+            "a first-try success must never wait at all"
+        );
     }
 
     #[test]
@@ -1166,14 +1324,28 @@ mod tests {
         let result: Result<(), AppError> = retry_with_backoff(
             || {
                 attempts += 1;
-                if attempts <= 2 { Err(AppError::Timeout("still gone".into())) } else { Err(AppError::BadToken) }
+                if attempts <= 2 {
+                    Err(AppError::Timeout("still gone".into()))
+                } else {
+                    Err(AppError::BadToken)
+                }
             },
             |d| sleeps.push(d),
         );
 
-        assert_eq!(attempts, 3, "must stop trying the moment a fatal error appears");
-        assert_eq!(result.unwrap_err().exit_code(), crate::cli::ExitCode::BadToken);
-        assert_eq!(sleeps.len(), 2, "one wait per retryable failure, none after the fatal one");
+        assert_eq!(
+            attempts, 3,
+            "must stop trying the moment a fatal error appears"
+        );
+        assert_eq!(
+            result.unwrap_err().exit_code(),
+            crate::cli::ExitCode::BadToken
+        );
+        assert_eq!(
+            sleeps.len(),
+            2,
+            "one wait per retryable failure, none after the fatal one"
+        );
     }
 
     #[test]
@@ -1187,14 +1359,21 @@ mod tests {
         let result: Result<(), AppError> = retry_with_backoff(
             || {
                 attempts += 1;
-                if attempts <= 4 { Err(AppError::Timeout("still gone".into())) } else { Err(AppError::Usage("stop".into())) }
+                if attempts <= 4 {
+                    Err(AppError::Timeout("still gone".into()))
+                } else {
+                    Err(AppError::Usage("stop".into()))
+                }
             },
             |d| sleeps.push(d),
         );
 
         assert!(result.is_err());
         assert_eq!(sleeps.len(), 4);
-        assert!(sleeps.iter().all(|d| !d.is_zero()), "every backoff must actually delay: {sleeps:?}");
+        assert!(
+            sleeps.iter().all(|d| !d.is_zero()),
+            "every backoff must actually delay: {sleeps:?}"
+        );
         assert_eq!(sleeps[0], WATCH_RECONNECT_BACKOFF_INITIAL);
         assert_eq!(sleeps[1], WATCH_RECONNECT_BACKOFF_INITIAL * 2);
         assert_eq!(sleeps[2], WATCH_RECONNECT_BACKOFF_INITIAL * 4);
@@ -1213,7 +1392,11 @@ mod tests {
         let _: Result<(), AppError> = retry_with_backoff(
             || {
                 attempts += 1;
-                if attempts <= 8 { Err(AppError::Timeout("still gone".into())) } else { Err(AppError::BadToken) }
+                if attempts <= 8 {
+                    Err(AppError::Timeout("still gone".into()))
+                } else {
+                    Err(AppError::BadToken)
+                }
             },
             |d| sleeps.push(d),
         );
@@ -1223,7 +1406,11 @@ mod tests {
             sleeps.iter().all(|d| *d <= WATCH_RECONNECT_BACKOFF_CEILING),
             "backoff must be capped at the ceiling: {sleeps:?}"
         );
-        assert_eq!(*sleeps.last().unwrap(), WATCH_RECONNECT_BACKOFF_CEILING, "it should have reached the cap by the 8th wait");
+        assert_eq!(
+            *sleeps.last().unwrap(),
+            WATCH_RECONNECT_BACKOFF_CEILING,
+            "it should have reached the cap by the 8th wait"
+        );
     }
 
     #[test]

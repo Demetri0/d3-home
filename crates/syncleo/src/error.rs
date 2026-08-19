@@ -43,7 +43,9 @@ pub enum Error {
          powered on -- if so, trying again in a few seconds may work"
     )]
     NoState,
-    #[error("device advertises curve {curve} protocol {protocol}, which this client was not written for")]
+    #[error(
+        "device advertises curve {curve} protocol {protocol}, which this client was not written for"
+    )]
     UnsupportedProtocol { curve: u8, protocol: u16 },
     #[error("service record has no usable address (only link-local addresses, or none at all)")]
     NoUsableAddress,

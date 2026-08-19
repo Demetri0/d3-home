@@ -33,7 +33,9 @@ impl Block {
         // Leave room for the bar, the blank line, and a line of breathing
         // space, so the block never grows taller than the screen it is
         // redrawn on: the cursor arithmetic assumes nothing scrolled away.
-        let capacity = DEFAULT_LINES.min(usize::from(rows).saturating_sub(4)).max(1);
+        let capacity = DEFAULT_LINES
+            .min(usize::from(rows).saturating_sub(4))
+            .max(1);
         Self {
             active: terminal,
             drawn_rows: 0,
@@ -147,7 +149,11 @@ mod tests {
             block.push(format!("line {i}"));
         }
         assert_eq!(block.lines.len(), 3);
-        assert_eq!(block.lines.front().unwrap(), "line 7", "oldest should fall off");
+        assert_eq!(
+            block.lines.front().unwrap(),
+            "line 7",
+            "oldest should fall off"
+        );
         assert_eq!(block.lines.back().unwrap(), "line 9");
     }
 

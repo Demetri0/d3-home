@@ -97,14 +97,20 @@ impl Spinner {
     /// "don't draw" paths can be exercised in a unit test.
     fn start_if(label: &str, animate: bool) -> Self {
         if !animate {
-            return Self { stop: None, handle: None };
+            return Self {
+                stop: None,
+                handle: None,
+            };
         }
 
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let label = label.to_string();
         let handle = std::thread::spawn(move || draw_until_stopped(&label, &thread_stop));
-        Self { stop: Some(stop), handle: Some(handle) }
+        Self {
+            stop: Some(stop),
+            handle: Some(handle),
+        }
     }
 
     /// Stop the animation and erase its line, blocking until the drawing
@@ -188,7 +194,11 @@ mod tests {
         let mut unique = labels.clone();
         unique.sort_unstable();
         unique.dedup();
-        assert_eq!(unique.len(), labels.len(), "phase labels must all be distinct: {labels:?}");
+        assert_eq!(
+            unique.len(),
+            labels.len(),
+            "phase labels must all be distinct: {labels:?}"
+        );
     }
 
     #[test]
@@ -219,7 +229,10 @@ mod tests {
         let mut spinner = Spinner::start_if("test", true);
         assert!(spinner.handle.is_some());
         spinner.stop();
-        assert!(spinner.handle.is_none(), "stop must join and clear the thread handle");
+        assert!(
+            spinner.handle.is_none(),
+            "stop must join and clear the thread handle"
+        );
         spinner.stop(); // idempotent, must not panic on a second call
     }
 

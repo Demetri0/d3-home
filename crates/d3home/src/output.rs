@@ -94,7 +94,10 @@ fn state_rich(state: &DeviceState, device: &Device, style: Style) -> String {
     out.push_str(&dot);
     out.push(' ');
     out.push_str(mode);
-    if let Some(target) = state.target_temperature.filter(|_| state.mode != Some(PowerMode::Off)) {
+    if let Some(target) = state
+        .target_temperature
+        .filter(|_| state.mode != Some(PowerMode::Off))
+    {
         out.push_str(&style.dim(&format!(" \u{2192} {target} \u{00b0}C")));
     }
     out.push_str("\n\n");
@@ -103,13 +106,24 @@ fn state_rich(state: &DeviceState, device: &Device, style: Style) -> String {
     // go" at a glance, and the rows below are the detail behind it.
     if let Some(current) = state.current_temperature {
         let heating = matches!(state.mode, Some(PowerMode::On) | Some(PowerMode::Custom));
-        out.push_str(&temperature_bar(current, state.target_temperature, heating, style));
+        out.push_str(&temperature_bar(
+            current,
+            state.target_temperature,
+            heating,
+            style,
+        ));
         out.push_str("\n\n");
     }
 
     let rows: [(&str, String); 4] = [
-        ("Current temperature", fmt_rich_temperature(state.current_temperature, false)),
-        ("Target temperature", fmt_rich_temperature(state.target_temperature, true)),
+        (
+            "Current temperature",
+            fmt_rich_temperature(state.current_temperature, false),
+        ),
+        (
+            "Target temperature",
+            fmt_rich_temperature(state.target_temperature, true),
+        ),
         ("Child lock", fmt_flag(state.child_lock).to_string()),
         (
             "Error",
@@ -123,7 +137,11 @@ fn state_rich(state: &DeviceState, device: &Device, style: Style) -> String {
         // Pad before painting: escape sequences have no width on screen but
         // every byte counts to `{:<21}`, so colouring first would push the
         // values out of line by exactly the length of the escape.
-        out.push_str(&format!("  {}{}\n", style.dim(&format!("{label:<21}")), value));
+        out.push_str(&format!(
+            "  {}{}\n",
+            style.dim(&format!("{label:<21}")),
+            value
+        ));
     }
 
     out.pop();
@@ -165,10 +183,22 @@ pub fn print_state(state: &DeviceState, device: &Device, json: bool) {
         if style.is_rich() {
             let _ = write_line(&state_rich(state, device, style));
         } else {
-            let _ = write_line(&format!("Mode:                {}", state.mode.map(mode_str).unwrap_or("unknown")));
-            let _ = write_line(&format!("Current temperature: {}", fmt_temperature(state.current_temperature)));
-            let _ = write_line(&format!("Target temperature:  {}", fmt_temperature(state.target_temperature)));
-            let _ = write_line(&format!("Child lock:          {}", fmt_flag(state.child_lock)));
+            let _ = write_line(&format!(
+                "Mode:                {}",
+                state.mode.map(mode_str).unwrap_or("unknown")
+            ));
+            let _ = write_line(&format!(
+                "Current temperature: {}",
+                fmt_temperature(state.current_temperature)
+            ));
+            let _ = write_line(&format!(
+                "Target temperature:  {}",
+                fmt_temperature(state.target_temperature)
+            ));
+            let _ = write_line(&format!(
+                "Child lock:          {}",
+                fmt_flag(state.child_lock)
+            ));
             let _ = write_line(&format!("Error:               {}", fmt_flag(state.error)));
         }
     }
@@ -190,7 +220,11 @@ pub fn print_state(state: &DeviceState, device: &Device, json: bool) {
 /// in this process's buffer -- exactly the kind of thing that turns "a
 /// stream" into "a stream that only delivers on exit."
 pub fn print_event(event: &Event, json: bool) -> std::io::Result<()> {
-    let line = if json { event_json(event).to_string() } else { event_human(event) };
+    let line = if json {
+        event_json(event).to_string()
+    } else {
+        event_human(event)
+    };
     write_line(&line)
 }
 
@@ -214,14 +248,21 @@ fn event_json(event: &Event) -> serde_json::Value {
             // rather than guessing.
             let mut value = json!({"diagnostic": d});
             if let Some(pairs) = decode_diagnostic(d) {
-                let decoded: Vec<_> =
-                    pairs.into_iter().map(|(tag, v)| json!({"tag": tag, "value": v})).collect();
+                let decoded: Vec<_> = pairs
+                    .into_iter()
+                    .map(|(tag, v)| json!({"tag": tag, "value": v}))
+                    .collect();
                 value["diagnostic_decoded"] = serde_json::Value::Array(decoded);
             }
             value
         }
         Event::Ping => json!({"ping": true}),
-        Event::HandshakeResponse { protocol, fw_major, fw_minor, mode } => json!({
+        Event::HandshakeResponse {
+            protocol,
+            fw_major,
+            fw_minor,
+            mode,
+        } => json!({
             "handshake": {"protocol": protocol, "fw_major": fw_major, "fw_minor": fw_minor, "mode": mode}
         }),
         Event::Unknown { ty, data } => json!({"unknown": {"ty": ty, "data": data}}),
@@ -256,14 +297,22 @@ fn event_human(event: &Event) -> String {
         // hiding or guessing at it.
         Event::Diagnostic(d) => match decode_diagnostic(d) {
             Some(pairs) => {
-                let rendered =
-                    pairs.iter().map(|(tag, v)| format!("{tag}={v}")).collect::<Vec<_>>().join(" ");
+                let rendered = pairs
+                    .iter()
+                    .map(|(tag, v)| format!("{tag}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 format!("diagnostic: {rendered}")
             }
             None => format!("diagnostic: {d:?}"),
         },
         Event::Ping => "ping".to_string(),
-        Event::HandshakeResponse { protocol, fw_major, fw_minor, .. } => {
+        Event::HandshakeResponse {
+            protocol,
+            fw_major,
+            fw_minor,
+            ..
+        } => {
             format!("handshake: protocol {protocol}, firmware {fw_major}.{fw_minor}")
         }
         Event::Unknown { ty, data } => format!("unknown event {ty}: {data:?}"),
@@ -444,9 +493,13 @@ impl WatchView {
     }
 
     fn connected_note(&self) -> String {
-        let current = self.current.map_or_else(|| "unknown".into(), |t| format!("{t} \u{00b0}C"));
+        let current = self
+            .current
+            .map_or_else(|| "unknown".into(), |t| format!("{t} \u{00b0}C"));
         match (self.heating, self.target) {
-            (true, Some(target)) => format!("connected \u{2014} {current}, heating to {target} \u{00b0}C"),
+            (true, Some(target)) => {
+                format!("connected \u{2014} {current}, heating to {target} \u{00b0}C")
+            }
             (true, None) => format!("connected \u{2014} {current}, heating"),
             (false, _) => format!("connected \u{2014} {current}, idle"),
         }
@@ -476,7 +529,12 @@ impl WatchView {
     }
 
     fn bar(&self, current: u8) -> Option<String> {
-        Some(temperature_bar(current, self.target, self.heating, self.style))
+        Some(temperature_bar(
+            current,
+            self.target,
+            self.heating,
+            self.style,
+        ))
     }
 }
 
@@ -493,7 +551,11 @@ impl WatchView {
 /// caller decides what to do about it rather than this panicking on a
 /// downstream reader that has simply gone away.
 pub fn print_watch_reconnected(json: bool) -> std::io::Result<()> {
-    let line = if json { reconnected_json().to_string() } else { RECONNECTED_HUMAN.to_string() };
+    let line = if json {
+        reconnected_json().to_string()
+    } else {
+        RECONNECTED_HUMAN.to_string()
+    };
     write_line(&line)
 }
 
@@ -557,7 +619,10 @@ pub fn print_devices(config: &Config, json: bool) {
         println!("  {heading}");
 
         let rows = [
-            ("model", device.model.clone().unwrap_or_else(|| "unknown".into())),
+            (
+                "model",
+                device.model.clone().unwrap_or_else(|| "unknown".into()),
+            ),
             ("driver", device.driver.clone()),
             ("mac", pretty_mac(&device.mac)),
             (
@@ -611,7 +676,13 @@ fn found_json(f: &Found) -> serde_json::Value {
 }
 
 fn found_human(f: &Found) -> String {
-    format!("{} at {}:{} (public key: {})", f.mac, f.address_display(), f.port, hex_encode(&f.public_wire))
+    format!(
+        "{} at {}:{} (public key: {})",
+        f.mac,
+        f.address_display(),
+        f.port,
+        hex_encode(&f.public_wire)
+    )
 }
 
 /// Confirm a heat that the device acknowledged.
@@ -655,7 +726,10 @@ pub struct TraceView {
 
 impl TraceView {
     pub fn new(json: bool) -> Self {
-        Self { style: Style::detect(), json }
+        Self {
+            style: Style::detect(),
+            json,
+        }
     }
 
     pub fn event(&mut self, event: &Event) -> std::io::Result<()> {
@@ -812,9 +886,18 @@ mod tests {
     }
 
     fn view_at(current: u8, target: Option<u8>, heating: bool) -> WatchView {
-        WatchView { style: Style::Rich, json: false, target, current: Some(current), heating,
-            error: None, child_lock: None, announced: true,
-            block: crate::screen::Block::new(false), live: false }
+        WatchView {
+            style: Style::Rich,
+            json: false,
+            target,
+            current: Some(current),
+            heating,
+            error: None,
+            child_lock: None,
+            announced: true,
+            block: crate::screen::Block::new(false),
+            live: false,
+        }
     }
 
     #[test]
@@ -830,11 +913,27 @@ mod tests {
     #[test]
     fn json_and_plain_streams_keep_one_line_per_reading() {
         // Something is parsing those, so they must not be collapsed.
-        for (style, json) in [(Style::Plain, false), (Style::Rich, true), (Style::Plain, true)] {
-            let view = WatchView { style, json, target: Some(60), current: Some(40), heating: true,
-                error: None, child_lock: None, announced: true,
-            block: crate::screen::Block::new(false), live: false };
-            assert!(!view.animated(), "style {style:?} json {json} should not animate");
+        for (style, json) in [
+            (Style::Plain, false),
+            (Style::Rich, true),
+            (Style::Plain, true),
+        ] {
+            let view = WatchView {
+                style,
+                json,
+                target: Some(60),
+                current: Some(40),
+                heating: true,
+                error: None,
+                child_lock: None,
+                announced: true,
+                block: crate::screen::Block::new(false),
+                live: false,
+            };
+            assert!(
+                !view.animated(),
+                "style {style:?} json {json} should not animate"
+            );
         }
         assert!(view_at(40, Some(60), true).animated());
     }
@@ -860,10 +959,19 @@ mod tests {
             .filter(|l| l.starts_with("  \u{1b}[2m"))
             .filter_map(|l| l.find("\u{1b}[0m").map(|i| i + "\u{1b}[0m".len()))
             .collect();
-        assert!(columns.len() >= 4, "expected the reading rows, got {block:?}");
-        assert!(columns.windows(2).all(|w| w[0] == w[1]), "values not aligned: {columns:?}");
+        assert!(
+            columns.len() >= 4,
+            "expected the reading rows, got {block:?}"
+        );
+        assert!(
+            columns.windows(2).all(|w| w[0] == w[1]),
+            "values not aligned: {columns:?}"
+        );
         assert!(block.contains("78 \u{00b0}C"));
-        assert!(block.contains('\u{2014}'), "a target of 0 should read as a dash: {block:?}");
+        assert!(
+            block.contains('\u{2014}'),
+            "a target of 0 should read as a dash: {block:?}"
+        );
     }
 
     #[test]
@@ -877,8 +985,14 @@ mod tests {
             child_lock: Some(false),
         };
         let block = state_rich(&state, &sample_device(), Style::Plain);
-        assert!(!block.contains('\u{1b}'), "escape leaked into plain output: {block:?}");
-        assert!(block.contains("78"), "the reading itself must survive: {block:?}");
+        assert!(
+            !block.contains('\u{1b}'),
+            "escape leaked into plain output: {block:?}"
+        );
+        assert!(
+            block.contains("78"),
+            "the reading itself must survive: {block:?}"
+        );
     }
     use std::net::Ipv4Addr;
     use syncleo::codec::command::Event;
@@ -888,14 +1002,18 @@ mod tests {
         // The same worked example `decode_diagnostic` is golden-tested
         // against, exercised here through the actual rendering path.
         let payload: Vec<u8> = vec![
-            255, 2, 0, 0, 172, 56, 0, 0, 192, 111, 65, 4, 0, 0, 0, 0, 157, 47, 54, 3, // header
+            255, 2, 0, 0, 172, 56, 0, 0, 192, 111, 65, 4, 0, 0, 0, 0, 157, 47, 54,
+            3, // header
             117, 100, 112, 115, 186, 236, 7, 3, // udps = 50851002
             114, 116, 84, 0, 249, 9, 4, 0, // rtT\0 = 264697
             112, 112, 84, 0, 52, 211, 11, 0, // ppT\0 = 774964
             84, 109, 114, 32, 218, 9, 5, 0, // "Tmr " = 330202
         ];
         let line = event_human(&Event::Diagnostic(payload));
-        assert_eq!(line, "diagnostic: udps=50851002 rtT=264697 ppT=774964 Tmr =330202");
+        assert_eq!(
+            line,
+            "diagnostic: udps=50851002 rtT=264697 ppT=774964 Tmr =330202"
+        );
     }
 
     #[test]
@@ -915,7 +1033,10 @@ mod tests {
             .collect::<Vec<u8>>();
         let value = event_json(&Event::Diagnostic(payload.clone()));
         assert_eq!(value["diagnostic"], json!(payload));
-        assert_eq!(value["diagnostic_decoded"], json!([{"tag": "IDLE", "value": 7}]));
+        assert_eq!(
+            value["diagnostic_decoded"],
+            json!([{"tag": "IDLE", "value": 7}])
+        );
     }
 
     #[test]
@@ -931,7 +1052,8 @@ mod tests {
         // the seam between sessions -- a consumer that parses every line
         // (`jq`, a notifier) must not choke on this one.
         let line = reconnected_json().to_string();
-        let value: serde_json::Value = serde_json::from_str(&line).expect("must be one JSON object");
+        let value: serde_json::Value =
+            serde_json::from_str(&line).expect("must be one JSON object");
         assert_eq!(value["reconnected"], serde_json::json!(true));
     }
 
@@ -970,7 +1092,10 @@ mod tests {
         // hand-fill `[devices.cached]`'s `public_key` field, and the cache
         // escape hatch the design describes is unwalkable.
         let line = found_human(&sample_found());
-        assert!(line.contains(&hex_encode(&[0xAB; 32])), "public key missing from: {line}");
+        assert!(
+            line.contains(&hex_encode(&[0xAB; 32])),
+            "public key missing from: {line}"
+        );
     }
 
     #[test]
@@ -1002,7 +1127,10 @@ mod tests {
     #[test]
     fn a_global_address_has_no_percent_suffix_in_either_output() {
         let human = found_human(&sample_found());
-        assert!(!human.contains('%'), "a global address needs no scope: {human}");
+        assert!(
+            !human.contains('%'),
+            "a global address needs no scope: {human}"
+        );
 
         let value = found_json(&sample_found());
         assert_eq!(value["address"], "192.168.1.42");

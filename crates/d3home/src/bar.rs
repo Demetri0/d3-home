@@ -13,7 +13,12 @@ use crate::style::Style;
 /// 40 °C looks the same whether it is heading for 60 or for boiling.
 pub fn temperature_bar(current: u8, target: Option<u8>, heating: bool, style: Style) -> String {
     const CELLS: usize = 25;
-    let cell_of = |t: u8| (usize::from(t) * CELLS).div_ceil(100).min(CELLS).saturating_sub(1);
+    let cell_of = |t: u8| {
+        (usize::from(t) * CELLS)
+            .div_ceil(100)
+            .min(CELLS)
+            .saturating_sub(1)
+    };
 
     let filled = cell_of(current);
     let target_cell = target.map(cell_of);
@@ -65,7 +70,10 @@ mod tests {
     fn the_target_is_marked_with_a_ring_the_eye_can_find() {
         let line = temperature_bar(40, Some(60), true, Style::Rich);
         assert_eq!(count(&line, '\u{25c9}'), 1, "exactly one ring: {line:?}");
-        assert!(line.contains("\u{1b}[93m"), "the ring should stand out: {line:?}");
+        assert!(
+            line.contains("\u{1b}[93m"),
+            "the ring should stand out: {line:?}"
+        );
     }
 
     #[test]
@@ -73,8 +81,14 @@ mod tests {
         let hot = temperature_bar(76, Some(100), true, Style::Rich);
         let cold = temperature_bar(76, Some(100), false, Style::Rich);
         assert_eq!(count(&hot, '\u{25cf}'), count(&cold, '\u{25cf}'));
-        assert!(hot.contains("\u{1b}[92m"), "heating should be green: {hot:?}");
-        assert!(cold.contains("\u{1b}[97m"), "idle should still read as data: {cold:?}");
+        assert!(
+            hot.contains("\u{1b}[92m"),
+            "heating should be green: {hot:?}"
+        );
+        assert!(
+            cold.contains("\u{1b}[97m"),
+            "idle should still read as data: {cold:?}"
+        );
         assert!(!cold.contains("\u{1b}[92m"));
     }
 
@@ -88,7 +102,10 @@ mod tests {
     #[test]
     fn a_plain_terminal_gets_the_bar_without_escape_sequences() {
         let line = temperature_bar(40, Some(60), true, Style::Plain);
-        assert!(!line.contains('\u{1b}'), "escape leaked into plain output: {line:?}");
+        assert!(
+            !line.contains('\u{1b}'),
+            "escape leaked into plain output: {line:?}"
+        );
         assert!(line.contains("40") && line.contains("60"));
     }
 }

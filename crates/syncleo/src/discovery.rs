@@ -83,7 +83,6 @@ pub trait Discovery {
     fn find(&self, mac: &str, timeout: Duration) -> Result<Option<Found>, Error>;
 }
 
-
 /// How long to keep listening after the device we were looking for answers.
 ///
 /// Not zero: a device can be resolved on more than one interface, and a
@@ -104,7 +103,10 @@ struct ScanWindow {
 
 impl ScanWindow {
     fn new(now: Instant, timeout: Duration) -> Self {
-        Self { overall: now + timeout, shortened: None }
+        Self {
+            overall: now + timeout,
+            shortened: None,
+        }
     }
 
     /// Called when the scan has what it came for. The window closes after
@@ -112,11 +114,16 @@ impl ScanWindow {
     fn satisfied(&mut self, now: Instant) {
         let candidate = now + GRACE_AFTER_MATCH;
         let deadline = candidate.min(self.overall);
-        self.shortened = Some(self.shortened.map_or(deadline, |existing| existing.min(deadline)));
+        self.shortened = Some(
+            self.shortened
+                .map_or(deadline, |existing| existing.min(deadline)),
+        );
     }
 
     fn remaining(&self, now: Instant) -> Duration {
-        self.shortened.unwrap_or(self.overall).saturating_duration_since(now)
+        self.shortened
+            .unwrap_or(self.overall)
+            .saturating_duration_since(now)
     }
 }
 
@@ -135,7 +142,11 @@ impl MdnsDiscovery {
 impl MdnsDiscovery {
     /// Browse until `timeout`, or until `enough` recognises what we came
     /// for and the grace period after it elapses.
-    fn scan(&self, timeout: Duration, mut enough: impl FnMut(&Found) -> bool) -> Result<Vec<Found>, Error> {
+    fn scan(
+        &self,
+        timeout: Duration,
+        mut enough: impl FnMut(&Found) -> bool,
+    ) -> Result<Vec<Found>, Error> {
         let receiver = self.daemon.browse(SERVICE_TYPE).map_err(mdns_error)?;
         let mut window = ScanWindow::new(Instant::now(), timeout);
         let mut found = Vec::new();
@@ -220,16 +231,23 @@ fn mdns_error(err: mdns_sd::Error) -> Error {
 /// only ever sets `interface` for the `V6` case.
 fn scoped_addr(scoped: &ScopedIp) -> ScopedAddr {
     match scoped {
-        ScopedIp::V4(v4) => ScopedAddr { addr: IpAddr::V4(*v4.addr()), interface: None },
-        ScopedIp::V6(v6) => {
-            ScopedAddr { addr: IpAddr::V6(*v6.addr()), interface: Some(v6.scope_id().name.clone()) }
-        }
+        ScopedIp::V4(v4) => ScopedAddr {
+            addr: IpAddr::V4(*v4.addr()),
+            interface: None,
+        },
+        ScopedIp::V6(v6) => ScopedAddr {
+            addr: IpAddr::V6(*v6.addr()),
+            interface: Some(v6.scope_id().name.clone()),
+        },
         // `ScopedIp` is `#[non_exhaustive]`; a future `mdns-sd` release
         // could add a variant this was never written for. `to_ip_addr` is
         // the one thing every variant is guaranteed to have, so fall back
         // to it with no scope rather than failing to compile against a
         // dependency bump.
-        other => ScopedAddr { addr: other.to_ip_addr(), interface: None },
+        other => ScopedAddr {
+            addr: other.to_ip_addr(),
+            interface: None,
+        },
     }
 }
 
@@ -266,7 +284,15 @@ pub fn parse_service(
 
     let public_wire = decode_public_key(public_hex)?;
 
-    Ok(Found { mac, address, interface, port, public_wire, curve, protocol })
+    Ok(Found {
+        mac,
+        address,
+        interface,
+        port,
+        public_wire,
+        curve,
+        protocol,
+    })
 }
 
 /// Keep at most one [`Found`] per MAC address.
@@ -292,7 +318,10 @@ fn dedupe_by_mac(found: Vec<Found>) -> Vec<Found> {
     let mut kept: Vec<Found> = Vec::with_capacity(found.len());
     for candidate in found {
         match kept.iter().position(|f| f.mac == candidate.mac) {
-            Some(i) if is_globally_usable(&candidate.address) && !is_globally_usable(&kept[i].address) => {
+            Some(i)
+                if is_globally_usable(&candidate.address)
+                    && !is_globally_usable(&kept[i].address) =>
+            {
                 kept[i] = candidate;
             }
             Some(_) => {}
@@ -361,7 +390,9 @@ fn hex_digit(b: u8) -> Result<u8, Error> {
         b'0'..=b'9' => Ok(b - b'0'),
         b'a'..=b'f' => Ok(b - b'a' + 10),
         b'A'..=b'F' => Ok(b - b'A' + 10),
-        _ => Err(Error::BadServiceRecord("public key is not valid hex".into())),
+        _ => Err(Error::BadServiceRecord(
+            "public key is not valid hex".into(),
+        )),
     }
 }
 
@@ -391,7 +422,10 @@ mod tests {
         let now = Instant::now();
         let window = ScanWindow::new(now, Duration::from_secs(5));
         assert_eq!(window.remaining(now), Duration::from_secs(5));
-        assert_eq!(window.remaining(now + Duration::from_secs(2)), Duration::from_secs(3));
+        assert_eq!(
+            window.remaining(now + Duration::from_secs(2)),
+            Duration::from_secs(3)
+        );
     }
 
     #[test]
@@ -425,7 +459,11 @@ mod tests {
         window.satisfied(now + Duration::from_millis(100));
         let first_close = window.remaining(now);
         window.satisfied(now + Duration::from_millis(200));
-        assert_eq!(window.remaining(now), first_close, "the window drifted later");
+        assert_eq!(
+            window.remaining(now),
+            first_close,
+            "the window drifted later"
+        );
     }
     use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -440,11 +478,17 @@ mod tests {
     const PUBLIC: &str = "21d4043d930c3d75140c158c3406257204670512254e6e145eae239f354bdb57";
 
     fn v4(addr: Ipv4Addr) -> ScopedAddr {
-        ScopedAddr { addr: addr.into(), interface: None }
+        ScopedAddr {
+            addr: addr.into(),
+            interface: None,
+        }
     }
 
     fn v6(addr: Ipv6Addr, interface: Option<&str>) -> ScopedAddr {
-        ScopedAddr { addr: addr.into(), interface: interface.map(str::to_string) }
+        ScopedAddr {
+            addr: addr.into(),
+            interface: interface.map(str::to_string),
+        }
     }
 
     /// The kettle from the field report: it advertises exactly one address,
@@ -474,7 +518,10 @@ mod tests {
     fn skips_link_local_addresses() {
         let found = parse_service(
             "deadbeefdead._syncleo._udp.local.",
-            &[v4(Ipv4Addr::new(169, 254, 3, 4)), v4(Ipv4Addr::new(192, 168, 1, 42))],
+            &[
+                v4(Ipv4Addr::new(169, 254, 3, 4)),
+                v4(Ipv4Addr::new(192, 168, 1, 42)),
+            ],
             8888,
             &txt(PUBLIC, "29", "2"),
         )
@@ -495,7 +542,10 @@ mod tests {
         // regardless of which interface traffic ends up leaving from.
         let found = parse_service(
             "deadbeefdead._syncleo._udp.local.",
-            &[v6(kettle_link_local(), Some("enp8s0")), v4(Ipv4Addr::new(192, 168, 1, 42))],
+            &[
+                v6(kettle_link_local(), Some("enp8s0")),
+                v4(Ipv4Addr::new(192, 168, 1, 42)),
+            ],
             8888,
             &txt(PUBLIC, "29", "2"),
         )
@@ -545,43 +595,51 @@ mod tests {
     #[test]
     fn refuses_protocol_versions_it_was_not_written_for() {
         // Guessing at an unknown protocol version would be worse than saying so.
-        assert!(parse_service(
-            "deadbeefdead._syncleo._udp.local.",
-            &[v4(Ipv4Addr::new(192, 168, 1, 42))],
-            8888,
-            &txt(PUBLIC, "29", "3"),
-        )
-        .is_err());
+        assert!(
+            parse_service(
+                "deadbeefdead._syncleo._udp.local.",
+                &[v4(Ipv4Addr::new(192, 168, 1, 42))],
+                8888,
+                &txt(PUBLIC, "29", "3"),
+            )
+            .is_err()
+        );
 
-        assert!(parse_service(
-            "deadbeefdead._syncleo._udp.local.",
-            &[v4(Ipv4Addr::new(192, 168, 1, 42))],
-            8888,
-            &txt(PUBLIC, "30", "2"),
-        )
-        .is_err());
+        assert!(
+            parse_service(
+                "deadbeefdead._syncleo._udp.local.",
+                &[v4(Ipv4Addr::new(192, 168, 1, 42))],
+                8888,
+                &txt(PUBLIC, "30", "2"),
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn refuses_a_record_with_no_usable_address() {
-        assert!(parse_service(
-            "deadbeefdead._syncleo._udp.local.",
-            &[v4(Ipv4Addr::new(169, 254, 3, 4))],
-            8888,
-            &txt(PUBLIC, "29", "2"),
-        )
-        .is_err());
+        assert!(
+            parse_service(
+                "deadbeefdead._syncleo._udp.local.",
+                &[v4(Ipv4Addr::new(169, 254, 3, 4))],
+                8888,
+                &txt(PUBLIC, "29", "2"),
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn refuses_a_malformed_public_key() {
-        assert!(parse_service(
-            "deadbeefdead._syncleo._udp.local.",
-            &[v4(Ipv4Addr::new(192, 168, 1, 42))],
-            8888,
-            &txt("abcd", "29", "2"),
-        )
-        .is_err());
+        assert!(
+            parse_service(
+                "deadbeefdead._syncleo._udp.local.",
+                &[v4(Ipv4Addr::new(192, 168, 1, 42))],
+                8888,
+                &txt("abcd", "29", "2"),
+            )
+            .is_err()
+        );
     }
 
     fn found_with(mac: &str, address: ScopedAddr) -> Found {
@@ -607,7 +665,11 @@ mod tests {
         let link_local = found_with("deadbeefdead", v6(kettle_link_local(), Some("enp8s0")));
 
         let link_local_first = dedupe_by_mac(vec![link_local.clone(), global.clone()]);
-        assert_eq!(link_local_first, vec![global.clone()], "a global address must win regardless of order");
+        assert_eq!(
+            link_local_first,
+            vec![global.clone()],
+            "a global address must win regardless of order"
+        );
 
         let global_first = dedupe_by_mac(vec![global.clone(), link_local]);
         assert_eq!(global_first, vec![global]);
@@ -646,6 +708,9 @@ mod tests {
     fn find_all_returns_cleanly_when_nothing_answers_in_time() {
         let discovery = MdnsDiscovery::new().expect("mdns daemon should start");
         let found = discovery.find_all(Duration::from_millis(50));
-        assert!(found.is_ok(), "a timeout with no replies is not an error: {found:?}");
+        assert!(
+            found.is_ok(),
+            "a timeout with no replies is not an error: {found:?}"
+        );
     }
 }

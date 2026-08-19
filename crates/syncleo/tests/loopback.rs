@@ -5,9 +5,14 @@ use syncleo::simulator::KettleSimulator;
 use syncleo::transport::UdpTransport;
 
 const OUR_PRIVATE: [u8; 32] = [11; 32];
-const TOKEN: [u8; 16] = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
+const TOKEN: [u8; 16] = [
+    0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF,
+];
 
-fn connect(handle: &syncleo::simulator::KettleHandle, token: [u8; 16]) -> Result<Client, syncleo::Error> {
+fn connect(
+    handle: &syncleo::simulator::KettleHandle,
+    token: [u8; 16],
+) -> Result<Client, syncleo::Error> {
     let transport = UdpTransport::connect(handle.addr).unwrap();
     Client::connect(
         Box::new(transport),
@@ -42,12 +47,19 @@ fn reads_state_back_from_the_device() {
         .collect_state(Duration::from_millis(150), Duration::from_secs(2))
         .unwrap();
 
-    assert!(state.current_temperature.is_some(), "device reports its temperature");
+    assert!(
+        state.current_temperature.is_some(),
+        "device reports its temperature"
+    );
     // The simulator's default volume byte (42) is deliberately outside
     // {0, 1}: the old `WaterPresent(bool)` decode would have collapsed it
     // to `false` via `== 1`. Asserting the exact number here, end to end
     // through the simulator and the client, pins that it survives intact.
-    assert_eq!(state.volume, Some(42), "the raw volume byte must survive decoding intact");
+    assert_eq!(
+        state.volume,
+        Some(42),
+        "the raw volume byte must survive decoding intact"
+    );
 
     handle.shutdown();
 }
@@ -65,7 +77,9 @@ fn a_device_that_answers_promptly_returns_well_before_the_overall_deadline() {
 
     let overall = Duration::from_secs(5);
     let start = Instant::now();
-    let state = client.collect_state(Duration::from_millis(150), overall).unwrap();
+    let state = client
+        .collect_state(Duration::from_millis(150), overall)
+        .unwrap();
     let elapsed = start.elapsed();
 
     assert!(state.current_temperature.is_some());
@@ -91,7 +105,10 @@ fn a_device_that_starts_its_burst_late_still_produces_a_successful_read() {
         .collect_state(Duration::from_millis(150), Duration::from_secs(2))
         .expect("a generous overall deadline must still catch a late burst");
 
-    assert!(state.current_temperature.is_some(), "device reports its temperature");
+    assert!(
+        state.current_temperature.is_some(),
+        "device reports its temperature"
+    );
     assert!(state.volume.is_some(), "device reports a volume reading");
 
     handle.shutdown();
@@ -172,7 +189,9 @@ fn a_command_the_device_never_acknowledges_is_reported_as_an_error() {
 
     handle.ignore_commands();
 
-    let err = client.send(Command::TargetTemperature(80)).expect_err("must not report success");
+    let err = client
+        .send(Command::TargetTemperature(80))
+        .expect_err("must not report success");
     assert!(
         matches!(err, syncleo::Error::Timeout),
         "an exhausted resend must surface as the session's own give-up, got {err:?}"
@@ -195,7 +214,9 @@ fn a_command_the_device_naks_is_reported_distinctly_from_a_timeout() {
 
     handle.reject_commands();
 
-    let err = client.send(Command::TargetTemperature(80)).expect_err("must not report success");
+    let err = client
+        .send(Command::TargetTemperature(80))
+        .expect_err("must not report success");
     assert!(
         matches!(err, syncleo::Error::DeviceNak),
         "a device Nak must be distinguishable from a timeout, got {err:?}"

@@ -109,7 +109,12 @@ impl Client {
         let start = Instant::now();
         let (session, actions) = Session::new(our_private, device_public_wire, token, Millis(0));
 
-        let mut client = Client { transport, session, start, state: DeviceState::default() };
+        let mut client = Client {
+            transport,
+            session,
+            start,
+            state: DeviceState::default(),
+        };
         client.perform(&actions)?;
 
         let deadline = start + timeout;
@@ -184,7 +189,11 @@ impl Client {
     /// both would otherwise print identically as six `unknown` lines with
     /// exit code 0, and a script would have no way to distinguish them. Any
     /// field actually set still counts as a real (if partial) success.
-    pub fn collect_state(&mut self, quiet: Duration, overall: Duration) -> Result<DeviceState, Error> {
+    pub fn collect_state(
+        &mut self,
+        quiet: Duration,
+        overall: Duration,
+    ) -> Result<DeviceState, Error> {
         if let Some(err) = self.already_lost() {
             return Err(err);
         }
@@ -342,7 +351,12 @@ impl Client {
     /// `Session`'s module doc comment) and then exercise `Client`'s
     /// already-dead guard without waiting out any real deadline.
     fn from_parts(transport: Box<dyn Transport>, session: Session) -> Client {
-        Client { transport, session, start: Instant::now(), state: DeviceState::default() }
+        Client {
+            transport,
+            session,
+            start: Instant::now(),
+            state: DeviceState::default(),
+        }
     }
 }
 
@@ -376,7 +390,8 @@ mod tests {
         let (mut session, _initial) = Session::new([1; 32], [2; 32], [0xAA; 16], Millis(0));
         let lost = session.step(Input::Tick, Millis(15_000));
         assert!(
-            lost.iter().any(|a| matches!(a, Action::Lost(LostReason::Silence))),
+            lost.iter()
+                .any(|a| matches!(a, Action::Lost(LostReason::Silence))),
             "the session must have declared itself dead by now: {lost:?}"
         );
         assert_eq!(session.last_lost(), Some(LostReason::Silence));
@@ -384,7 +399,9 @@ mod tests {
         let mut client = Client::from_parts(Box::new(NullTransport), session);
 
         let start = Instant::now();
-        let err = client.send(Command::Ping).expect_err("a dead session must never accept a new command");
+        let err = client
+            .send(Command::Ping)
+            .expect_err("a dead session must never accept a new command");
         assert!(
             start.elapsed() < Duration::from_millis(500),
             "must fail immediately, not wait out SEND_DEADLINE: took {:?}",
@@ -403,8 +420,14 @@ mod tests {
         let mut client = Client::from_parts(Box::new(NullTransport), session);
 
         let start = Instant::now();
-        let err = client.watch(|_| ControlFlow::Continue(()), || true).expect_err("must not watch a dead session");
-        assert!(start.elapsed() < Duration::from_millis(500), "must fail immediately, took {:?}", start.elapsed());
+        let err = client
+            .watch(|_| ControlFlow::Continue(()), || true)
+            .expect_err("must not watch a dead session");
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "must fail immediately, took {:?}",
+            start.elapsed()
+        );
         assert!(matches!(err, Error::Silence), "got {err:?}");
     }
 }

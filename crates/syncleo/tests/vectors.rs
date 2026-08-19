@@ -3,13 +3,20 @@ use syncleo::codec::frame::{Frame, FrameType};
 use syncleo::codec::keys::SessionKeys;
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 fn keys() -> SessionKeys {
     SessionKeys {
-        inkey: unhex("000102030405060708090a0b0c0d0e0f").try_into().unwrap(),
-        outkey: unhex("101112131415161718191a1b1c1d1e1f").try_into().unwrap(),
+        inkey: unhex("000102030405060708090a0b0c0d0e0f")
+            .try_into()
+            .unwrap(),
+        outkey: unhex("101112131415161718191a1b1c1d1e1f")
+            .try_into()
+            .unwrap(),
     }
 }
 
@@ -20,22 +27,34 @@ fn keys() -> SessionKeys {
 fn encrypts_mode_commands_byte_for_byte() {
     // command 1 (mode), payload 1 = on
     let frame = encrypt_frame(&keys(), 0x35, FrameType::Cmd, &[0x01, 0x01]);
-    assert_eq!(frame.to_bytes(), unhex("35011000c6ed01166ba072d2baa600574cc0bcc8"));
+    assert_eq!(
+        frame.to_bytes(),
+        unhex("35011000c6ed01166ba072d2baa600574cc0bcc8")
+    );
 
     // payload 0 = off, at sequence 0 (no rotation at all)
     let frame = encrypt_frame(&keys(), 0x00, FrameType::Cmd, &[0x01, 0x00]);
-    assert_eq!(frame.to_bytes(), unhex("000110004c4f50e332b954b25aabec5d9b69b46a"));
+    assert_eq!(
+        frame.to_bytes(),
+        unhex("000110004c4f50e332b954b25aabec5d9b69b46a")
+    );
 
     // payload 3 = custom, at sequence 0xFE (both nibbles rotate)
     let frame = encrypt_frame(&keys(), 0xFE, FrameType::Cmd, &[0x01, 0x03]);
-    assert_eq!(frame.to_bytes(), unhex("fe011000f184650ca412db228c17f105b574f0bc"));
+    assert_eq!(
+        frame.to_bytes(),
+        unhex("fe011000f184650ca412db228c17f105b574f0bc")
+    );
 }
 
 #[test]
 fn encrypts_a_target_temperature_command() {
     // command 2 (target temperature), 80 whole degrees, 0 hundredths
     let frame = encrypt_frame(&keys(), 0xC2, FrameType::Cmd, &[0x02, 80, 0]);
-    assert_eq!(frame.to_bytes(), unhex("c20110003c1e25f8bcd62e14e9cad115d182ceae"));
+    assert_eq!(
+        frame.to_bytes(),
+        unhex("c20110003c1e25f8bcd62e14e9cad115d182ceae")
+    );
 }
 
 #[test]
@@ -53,7 +72,10 @@ fn decrypts_a_frame_sent_by_the_device() {
 fn round_trips_every_body_length_through_a_padding_boundary() {
     // 14 bytes of body plus the sequence byte exactly fills one AES block,
     // which is where PKCS7 bugs hide.
-    let device_view = SessionKeys { inkey: keys().outkey, outkey: keys().inkey };
+    let device_view = SessionKeys {
+        inkey: keys().outkey,
+        outkey: keys().inkey,
+    };
 
     for len in 0..40usize {
         let body: Vec<u8> = (0..len).map(|i| i as u8).collect();
@@ -69,7 +91,10 @@ fn rejects_a_frame_whose_sequence_was_tampered_with() {
     let mut frame = Frame::parse(&raw).unwrap();
     frame.head.seq = 0x36;
 
-    assert!(decrypt_frame(&keys(), &frame).is_err(), "sequence mismatch must be caught");
+    assert!(
+        decrypt_frame(&keys(), &frame).is_err(),
+        "sequence mismatch must be caught"
+    );
 }
 
 proptest::proptest! {
@@ -102,13 +127,22 @@ proptest::proptest! {
 fn encrypts_an_ack_frame_byte_for_byte() {
     // Ack carries no body -- only the sequence byte is encrypted.
     let frame = encrypt_frame(&keys(), 0x42, FrameType::Ack, &[]);
-    assert_eq!(frame.to_bytes(), unhex("4200100095eb3dc5eaa61755232adfee881ca3eb"));
+    assert_eq!(
+        frame.to_bytes(),
+        unhex("4200100095eb3dc5eaa61755232adfee881ca3eb")
+    );
 
     let frame = encrypt_frame(&keys(), 0x00, FrameType::Ack, &[]);
-    assert_eq!(frame.to_bytes(), unhex("0000100007ddee3f704c606846d998133e2f5af3"));
+    assert_eq!(
+        frame.to_bytes(),
+        unhex("0000100007ddee3f704c606846d998133e2f5af3")
+    );
 
     let frame = encrypt_frame(&keys(), 0xFE, FrameType::Ack, &[]);
-    assert_eq!(frame.to_bytes(), unhex("fe001000892959f3fb40b33cbef413b00d82e663"));
+    assert_eq!(
+        frame.to_bytes(),
+        unhex("fe001000892959f3fb40b33cbef413b00d82e663")
+    );
 }
 
 #[test]
@@ -121,7 +155,10 @@ fn encrypts_a_nak_frame_with_the_same_ciphertext_as_the_matching_ack() {
     // (e.g. an encryption scheme that folded `ty` into the plaintext) would
     // still be caught.
     let frame = encrypt_frame(&keys(), 0x42, FrameType::Nak, &[]);
-    assert_eq!(frame.to_bytes(), unhex("4203100095eb3dc5eaa61755232adfee881ca3eb"));
+    assert_eq!(
+        frame.to_bytes(),
+        unhex("4203100095eb3dc5eaa61755232adfee881ca3eb")
+    );
 
     let ack = encrypt_frame(&keys(), 0x42, FrameType::Ack, &[]);
     assert_eq!(
@@ -135,7 +172,10 @@ fn encrypts_a_ping_command_byte_for_byte() {
     use syncleo::codec::command::Command;
 
     let frame = encrypt_frame(&keys(), 0x07, FrameType::Cmd, &Command::Ping.encode());
-    assert_eq!(frame.to_bytes(), unhex("07011000b8a7028c5cce585ee7399f68f882ed33"));
+    assert_eq!(
+        frame.to_bytes(),
+        unhex("07011000b8a7028c5cce585ee7399f68f882ed33")
+    );
 }
 
 #[test]
@@ -143,7 +183,9 @@ fn builds_the_reference_handshake_frame() {
     use syncleo::codec::handshake::handshake_frame;
 
     let our_public: [u8; 32] = core::array::from_fn(|i| i as u8);
-    let token: [u8; 16] = unhex("deadbeefdeadbeefdeadbeefdeadbeef").try_into().unwrap();
+    let token: [u8; 16] = unhex("deadbeefdeadbeefdeadbeefdeadbeef")
+        .try_into()
+        .unwrap();
 
     let frame = handshake_frame(&keys(), 0x01, &our_public, &token);
 

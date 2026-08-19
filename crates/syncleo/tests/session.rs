@@ -6,12 +6,20 @@ use syncleo::session::{Action, Input, LostReason, Millis, Session};
 
 const OUR_PRIVATE: [u8; 32] = [7; 32];
 const DEVICE_PRIVATE: [u8; 32] = [9; 32];
-const TOKEN: [u8; 16] = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
+const TOKEN: [u8; 16] = [
+    0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF,
+];
 
 /// Keys as the device sees them: same secret, roles swapped.
 fn device_keys() -> SessionKeys {
-    let k = derive(&OUR_PRIVATE, &syncleo::codec::keys::public_wire(&DEVICE_PRIVATE));
-    SessionKeys { inkey: k.outkey, outkey: k.inkey }
+    let k = derive(
+        &OUR_PRIVATE,
+        &syncleo::codec::keys::public_wire(&DEVICE_PRIVATE),
+    );
+    SessionKeys {
+        inkey: k.outkey,
+        outkey: k.inkey,
+    }
 }
 
 fn start() -> (Session, Vec<Action>) {
@@ -59,13 +67,19 @@ fn reports_connected_once_the_device_answers() {
 
     assert!(session.is_connected());
     assert!(actions.iter().any(|a| matches!(a, Action::Connected)));
-    assert!(!sent(&actions).is_empty(), "device commands must be acknowledged");
+    assert!(
+        !sent(&actions).is_empty(),
+        "device commands must be acknowledged"
+    );
 }
 
 #[test]
 fn acknowledges_incoming_commands_with_the_same_sequence() {
     let (mut session, _) = start();
-    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
+    session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(10),
+    );
 
     let actions = session.step(
         Input::Packet(from_device(0x42, FrameType::Cmd, &[20, 93, 0])),
@@ -73,7 +87,9 @@ fn acknowledges_incoming_commands_with_the_same_sequence() {
     );
 
     assert!(
-        actions.iter().any(|a| matches!(a, Action::Emit(Event::CurrentTemperature(93)))),
+        actions
+            .iter()
+            .any(|a| matches!(a, Action::Emit(Event::CurrentTemperature(93)))),
         "temperature must be emitted"
     );
     let ack = Frame::parse(&sent(&actions)[0]).unwrap();
@@ -84,18 +100,34 @@ fn acknowledges_incoming_commands_with_the_same_sequence() {
 #[test]
 fn survives_an_unknown_command() {
     let (mut session, _) = start();
-    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
+    session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(10),
+    );
 
-    let actions = session.step(Input::Packet(from_device(1, FrameType::Cmd, &[77, 9])), Millis(20));
+    let actions = session.step(
+        Input::Packet(from_device(1, FrameType::Cmd, &[77, 9])),
+        Millis(20),
+    );
 
-    assert!(session.is_connected(), "an unknown command must not drop the session");
-    assert!(actions.iter().any(|a| matches!(a, Action::Emit(Event::Unknown { ty: 77, .. }))));
+    assert!(
+        session.is_connected(),
+        "an unknown command must not drop the session"
+    );
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, Action::Emit(Event::Unknown { ty: 77, .. })))
+    );
 }
 
 #[test]
 fn resends_an_unacknowledged_command_then_gives_up() {
     let (mut session, _) = start();
-    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
+    session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(10),
+    );
 
     let first = session.request(Command::Mode(PowerMode::On), Millis(100));
     assert_eq!(sent(&first).len(), 1);
@@ -113,7 +145,10 @@ fn resends_an_unacknowledged_command_then_gives_up() {
 #[test]
 fn declares_the_connection_lost_when_a_command_exhausts_its_attempts() {
     let (mut session, _) = start();
-    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
+    session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(10),
+    );
 
     session.request(Command::Mode(PowerMode::On), Millis(100));
 
@@ -125,7 +160,9 @@ fn declares_the_connection_lost_when_a_command_exhausts_its_attempts() {
     }
 
     assert!(
-        actions.iter().any(|a| matches!(a, Action::Lost(LostReason::Unacknowledged))),
+        actions
+            .iter()
+            .any(|a| matches!(a, Action::Lost(LostReason::Unacknowledged))),
         "five unacknowledged attempts must declare the connection lost"
     );
     assert!(!session.is_connected());
@@ -134,7 +171,10 @@ fn declares_the_connection_lost_when_a_command_exhausts_its_attempts() {
 #[test]
 fn pings_every_three_seconds() {
     let (mut session, _) = start();
-    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(0));
+    session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(0),
+    );
 
     assert!(sent(&session.step(Input::Tick, Millis(2_999))).is_empty());
 
@@ -147,37 +187,63 @@ fn pings_every_three_seconds() {
 #[test]
 fn declares_the_connection_lost_after_fifteen_silent_seconds() {
     let (mut session, _) = start();
-    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(0));
+    session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(0),
+    );
 
-    assert!(session.step(Input::Tick, Millis(14_999)).iter().all(|a| !matches!(a, Action::Lost(_))));
+    assert!(
+        session
+            .step(Input::Tick, Millis(14_999))
+            .iter()
+            .all(|a| !matches!(a, Action::Lost(_)))
+    );
 
     let actions = session.step(Input::Tick, Millis(15_000));
-    assert!(actions.iter().any(|a| matches!(a, Action::Lost(LostReason::Silence))));
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, Action::Lost(LostReason::Silence)))
+    );
     assert!(!session.is_connected());
 }
 
 #[test]
 fn a_nak_matching_the_pending_frame_surfaces_as_nacked_not_a_silent_drop() {
     let (mut session, _) = start();
-    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
+    session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(10),
+    );
     assert!(session.is_connected());
 
     let pending = session.request(Command::TargetTemperature(200), Millis(100));
     let seq = Frame::parse(&sent(&pending)[0]).unwrap().head.seq;
 
-    let actions = session.step(Input::Packet(from_device(seq, FrameType::Nak, &[])), Millis(110));
+    let actions = session.step(
+        Input::Packet(from_device(seq, FrameType::Nak, &[])),
+        Millis(110),
+    );
 
     assert!(
-        actions.iter().any(|a| matches!(a, Action::Nacked(s) if *s == seq)),
+        actions
+            .iter()
+            .any(|a| matches!(a, Action::Nacked(s) if *s == seq)),
         "a Nak matching the pending frame must surface as Nacked, got {actions:?}"
     );
-    assert!(session.is_connected(), "a device Nak rejects one command, it does not kill the session");
+    assert!(
+        session.is_connected(),
+        "a device Nak rejects one command, it does not kill the session"
+    );
 }
 
 #[test]
 fn a_nak_that_does_not_match_the_pending_sequence_is_ignored() {
     let (mut session, _) = start();
-    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
+    session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(10),
+    );
 
     let pending = session.request(Command::TargetTemperature(80), Millis(100));
     let seq = Frame::parse(&sent(&pending)[0]).unwrap().head.seq;
@@ -185,8 +251,10 @@ fn a_nak_that_does_not_match_the_pending_sequence_is_ignored() {
     // A Nak for some other sequence entirely -- stale, or for a frame this
     // session never sent -- must not be mistaken for an answer to the
     // frame actually pending.
-    let actions =
-        session.step(Input::Packet(from_device(seq.wrapping_add(1), FrameType::Nak, &[])), Millis(110));
+    let actions = session.step(
+        Input::Packet(from_device(seq.wrapping_add(1), FrameType::Nak, &[])),
+        Millis(110),
+    );
 
     assert!(!actions.iter().any(|a| matches!(a, Action::Nacked(_))));
     assert!(session.is_connected());
@@ -196,9 +264,16 @@ fn a_nak_that_does_not_match_the_pending_sequence_is_ignored() {
 fn treats_a_rejected_handshake_as_a_bad_token() {
     let (mut session, _) = start();
 
-    let actions = session.step(Input::Packet(from_device(0, FrameType::Nak, &[])), Millis(10));
+    let actions = session.step(
+        Input::Packet(from_device(0, FrameType::Nak, &[])),
+        Millis(10),
+    );
 
-    assert!(actions.iter().any(|a| matches!(a, Action::Lost(LostReason::HandshakeRejected))));
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, Action::Lost(LostReason::HandshakeRejected)))
+    );
 }
 
 #[test]
@@ -213,7 +288,10 @@ fn a_pre_connection_ack_does_not_cancel_the_handshakes_own_resend() {
     let handshake_bytes = sent(&initial)[0].clone();
     let seq = Frame::parse(&handshake_bytes).unwrap().head.seq;
 
-    let ack_actions = session.step(Input::Packet(from_device(seq, FrameType::Ack, &[])), Millis(10));
+    let ack_actions = session.step(
+        Input::Packet(from_device(seq, FrameType::Ack, &[])),
+        Millis(10),
+    );
     assert!(
         !ack_actions.iter().any(|a| matches!(a, Action::Acked(_))),
         "a pre-connection ack must not surface as Acked, got {ack_actions:?}"
@@ -242,21 +320,33 @@ fn a_duplicate_ack_or_one_for_an_unsent_sequence_produces_no_acked() {
     // were, `Client::send` would report success on any ack-shaped packet
     // -- turning "the command was never delivered" into a false exit 0.
     let (mut session, _) = start();
-    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
+    session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(10),
+    );
 
     let pending = session.request(Command::TargetTemperature(80), Millis(100));
     let seq = Frame::parse(&sent(&pending)[0]).unwrap().head.seq;
 
-    let first = session.step(Input::Packet(from_device(seq, FrameType::Ack, &[])), Millis(110));
+    let first = session.step(
+        Input::Packet(from_device(seq, FrameType::Ack, &[])),
+        Millis(110),
+    );
     assert_eq!(
-        first.iter().filter(|a| matches!(a, Action::Acked(_))).count(),
+        first
+            .iter()
+            .filter(|a| matches!(a, Action::Acked(_)))
+            .count(),
         1,
         "the genuine ack must surface exactly once: {first:?}"
     );
 
     // The identical Ack again: the slot is already cleared, nothing was
     // sent a second time, so this must not surface a second `Acked`.
-    let duplicate = session.step(Input::Packet(from_device(seq, FrameType::Ack, &[])), Millis(120));
+    let duplicate = session.step(
+        Input::Packet(from_device(seq, FrameType::Ack, &[])),
+        Millis(120),
+    );
     assert!(
         !duplicate.iter().any(|a| matches!(a, Action::Acked(_))),
         "a duplicate ack must not surface again: {duplicate:?}"
@@ -282,22 +372,39 @@ fn nothing_happens_to_a_session_once_it_has_been_declared_lost() {
     // reconnect cycle for a session that already reconnected. Correct
     // today; this pins it.
     let (mut session, _) = start();
-    session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(0));
+    session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(0),
+    );
 
     let lost = session.step(Input::Tick, Millis(15_000));
-    assert!(lost.iter().any(|a| matches!(a, Action::Lost(LostReason::Silence))));
+    assert!(
+        lost.iter()
+            .any(|a| matches!(a, Action::Lost(LostReason::Silence)))
+    );
     assert!(!session.is_connected());
 
-    let late_handshake_response =
-        session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(15_010));
-    assert!(late_handshake_response.is_empty(), "got {late_handshake_response:?}");
+    let late_handshake_response = session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(15_010),
+    );
+    assert!(
+        late_handshake_response.is_empty(),
+        "got {late_handshake_response:?}"
+    );
 
-    let late_nak = session.step(Input::Packet(from_device(0, FrameType::Nak, &[])), Millis(15_020));
+    let late_nak = session.step(
+        Input::Packet(from_device(0, FrameType::Nak, &[])),
+        Millis(15_020),
+    );
     assert!(late_nak.is_empty(), "got {late_nak:?}");
 
     for i in 0..3u64 {
         let tick = session.step(Input::Tick, Millis(15_030 + i * 1_000));
-        assert!(tick.is_empty(), "a tick after Lost must produce nothing, got {tick:?}");
+        assert!(
+            tick.is_empty(),
+            "a tick after Lost must produce nothing, got {tick:?}"
+        );
     }
 
     // request() must also stay quiet: nothing this session could still
@@ -317,19 +424,39 @@ fn a_duplicate_handshake_response_after_connecting_does_not_disconnect_or_reconn
     // output shape that could be mistaken for a reconnect without being
     // one.
     let (mut session, _) = start();
-    let first = session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(10));
-    assert_eq!(first.iter().filter(|a| matches!(a, Action::Connected)).count(), 1);
+    let first = session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(10),
+    );
+    assert_eq!(
+        first
+            .iter()
+            .filter(|a| matches!(a, Action::Connected))
+            .count(),
+        1
+    );
     assert!(session.is_connected());
 
-    let second = session.step(Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])), Millis(20));
+    let second = session.step(
+        Input::Packet(from_device(0, FrameType::Cmd, &[0, 2, 0, 1, 4, 0])),
+        Millis(20),
+    );
     assert_eq!(
-        second.iter().filter(|a| matches!(a, Action::Connected)).count(),
+        second
+            .iter()
+            .filter(|a| matches!(a, Action::Connected))
+            .count(),
         0,
         "Connected must fire exactly once, got {second:?}"
     );
-    assert!(session.is_connected(), "a duplicate handshake response must not disconnect the session");
     assert!(
-        second.iter().any(|a| matches!(a, Action::Emit(Event::HandshakeResponse { .. }))),
+        session.is_connected(),
+        "a duplicate handshake response must not disconnect the session"
+    );
+    assert!(
+        second
+            .iter()
+            .any(|a| matches!(a, Action::Emit(Event::HandshakeResponse { .. }))),
         "the event itself is still emitted -- pinning that current, harmless behaviour: {second:?}"
     );
 }
@@ -338,8 +465,14 @@ fn a_duplicate_handshake_response_after_connecting_does_not_disconnect_or_reconn
 fn ignores_a_packet_it_cannot_decrypt() {
     let (mut session, _) = start();
 
-    let actions = session.step(Input::Packet(vec![0x00, 0x01, 0x04, 0x00, 1, 2, 3, 4]), Millis(10));
+    let actions = session.step(
+        Input::Packet(vec![0x00, 0x01, 0x04, 0x00, 1, 2, 3, 4]),
+        Millis(10),
+    );
 
-    assert!(actions.is_empty(), "garbage on the wire is dropped silently");
+    assert!(
+        actions.is_empty(),
+        "garbage on the wire is dropped silently"
+    );
     assert!(!session.is_connected());
 }

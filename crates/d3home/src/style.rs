@@ -35,7 +35,11 @@ impl Style {
     /// The decision itself, separated from where the answers come from so
     /// it can be tested without a terminal.
     pub fn decide(is_terminal: bool, no_color: bool, dumb_term: bool) -> Self {
-        if is_terminal && !no_color && !dumb_term { Self::Rich } else { Self::Plain }
+        if is_terminal && !no_color && !dumb_term {
+            Self::Rich
+        } else {
+            Self::Plain
+        }
     }
 
     pub fn is_rich(self) -> bool {
@@ -102,14 +106,25 @@ mod tests {
 
     #[test]
     fn the_user_and_the_terminal_can_both_say_no() {
-        assert_eq!(Style::decide(true, true, false), Style::Plain, "NO_COLOR ignored");
-        assert_eq!(Style::decide(true, false, true), Style::Plain, "TERM=dumb ignored");
+        assert_eq!(
+            Style::decide(true, true, false),
+            Style::Plain,
+            "NO_COLOR ignored"
+        );
+        assert_eq!(
+            Style::decide(true, false, true),
+            Style::Plain,
+            "TERM=dumb ignored"
+        );
     }
 
     #[test]
     fn rich_output_actually_paints() {
         let painted = Style::Rich.green("ok");
-        assert!(painted.starts_with('\x1b') && painted.ends_with("\x1b[0m"), "got {painted:?}");
+        assert!(
+            painted.starts_with('\x1b') && painted.ends_with("\x1b[0m"),
+            "got {painted:?}"
+        );
         assert!(painted.contains("ok"));
     }
 }

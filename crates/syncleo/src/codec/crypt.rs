@@ -49,7 +49,10 @@ pub fn decrypt_frame(keys: &SessionKeys, frame: &Frame) -> Result<Vec<u8>, Codec
 
     let (&first, rest) = plain.split_first().ok_or(CodecError::EmptyBody)?;
     if first != seq {
-        return Err(CodecError::SeqMismatch { head: seq, body: first });
+        return Err(CodecError::SeqMismatch {
+            head: seq,
+            body: first,
+        });
     }
     Ok(rest.to_vec())
 }

@@ -27,8 +27,11 @@ impl UdpTransport {
     /// UDP socket does not perform a handshake; it just fixes the peer that
     /// `send`/`recv` talk to.
     pub fn connect(addr: SocketAddr) -> std::io::Result<Self> {
-        let bind_addr: SocketAddr =
-            if addr.is_ipv4() { ([0, 0, 0, 0], 0).into() } else { ([0u16; 8], 0).into() };
+        let bind_addr: SocketAddr = if addr.is_ipv4() {
+            ([0, 0, 0, 0], 0).into()
+        } else {
+            ([0u16; 8], 0).into()
+        };
         let socket = UdpSocket::bind(bind_addr)?;
         socket.connect(addr)?;
         Ok(Self { socket })
@@ -93,7 +96,10 @@ impl Transport for UdpTransport {
 /// caller's poll loop into a busy loop until its own deadline elapses.
 fn is_no_data(e: &std::io::Error) -> bool {
     use std::io::ErrorKind::*;
-    matches!(e.kind(), WouldBlock | TimedOut | ConnectionRefused | ConnectionReset)
+    matches!(
+        e.kind(),
+        WouldBlock | TimedOut | ConnectionRefused | ConnectionReset
+    )
 }
 
 /// Build the address to connect to, resolving `interface` -- a stable
@@ -110,7 +116,11 @@ fn is_no_data(e: &std::io::Error) -> bool {
 /// link the address lives on -- so `interface` being `None` for one is
 /// rejected here with a clear error instead of being passed through to a
 /// socket call that would fail anyway, less legibly.
-pub fn socket_addr(address: IpAddr, port: u16, interface: Option<&str>) -> Result<SocketAddr, Error> {
+pub fn socket_addr(
+    address: IpAddr,
+    port: u16,
+    interface: Option<&str>,
+) -> Result<SocketAddr, Error> {
     let v6 = match address {
         IpAddr::V4(v4) => return Ok(SocketAddr::V4(SocketAddrV4::new(v4, port))),
         IpAddr::V6(v6) => v6,
@@ -130,7 +140,9 @@ pub fn socket_addr(address: IpAddr, port: u16, interface: Option<&str>) -> Resul
 /// do this -- see `if_nametoindex(3)`).
 fn interface_index(name: &str) -> Result<u32, Error> {
     let c_name = std::ffi::CString::new(name).map_err(|_| {
-        Error::Io(std::io::Error::other(format!("interface name {name:?} contains a NUL byte")))
+        Error::Io(std::io::Error::other(format!(
+            "interface name {name:?} contains a NUL byte"
+        )))
     })?;
     // Safety: `c_name` is a valid, NUL-terminated C string that outlives
     // the call, per `CString`'s own guarantee; `if_nametoindex` only reads
@@ -153,7 +165,10 @@ mod tests {
     #[test]
     fn a_global_ipv4_address_needs_no_interface() {
         let addr = socket_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 42)), 8888, None).unwrap();
-        assert_eq!(addr, SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 42), 8888)));
+        assert_eq!(
+            addr,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 168, 1, 42), 8888))
+        );
     }
 
     #[test]
@@ -183,7 +198,11 @@ mod tests {
         match addr {
             SocketAddr::V6(v6) => {
                 assert_eq!(*v6.ip(), link_local);
-                assert_ne!(v6.scope_id(), 0, "the loopback interface must resolve to a real index");
+                assert_ne!(
+                    v6.scope_id(),
+                    0,
+                    "the loopback interface must resolve to a real index"
+                );
             }
             SocketAddr::V4(_) => panic!("expected a V6 address"),
         }
@@ -206,7 +225,10 @@ mod tests {
             .recv(Duration::from_secs(2))
             .unwrap()
             .expect("a 3000-byte datagram must arrive");
-        assert_eq!(received, big, "the datagram must arrive whole, not truncated");
+        assert_eq!(
+            received, big,
+            "the datagram must arrive whole, not truncated"
+        );
     }
 
     #[test]
@@ -214,6 +236,9 @@ mod tests {
         let link_local: Ipv6Addr = "fe80::1".parse().unwrap();
         let err =
             socket_addr(IpAddr::V6(link_local), 8888, Some("d3home-no-such-iface")).unwrap_err();
-        assert!(matches!(err, Error::Io(_)), "expected an Io error, got {err:?}");
+        assert!(
+            matches!(err, Error::Io(_)),
+            "expected an Io error, got {err:?}"
+        );
     }
 }

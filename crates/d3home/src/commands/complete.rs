@@ -14,7 +14,9 @@ use crate::config::{Config, RESERVED};
 /// its completions follow, with no change to the shell scripts.
 fn actions_for(driver: &str) -> &'static [&'static str] {
     match driver {
-        "syncleo" => &["status", "start", "on", "set", "off", "stop", "watch", "trace"],
+        "syncleo" => &[
+            "status", "start", "on", "set", "off", "stop", "watch", "trace",
+        ],
         _ => &[],
     }
 }
@@ -56,12 +58,22 @@ pub fn candidates(words: &[String], config_path: &Path) -> Vec<String> {
         match prefix[0].as_str() {
             "alias" if prefix.len() == 1 => vec!["add".into(), "rm".into()],
             "completions" if prefix.len() == 1 => SHELLS.iter().map(|s| s.to_string()).collect(),
-            "add" => vec!["--name".into(), "--mac".into(), "--token".into(), "--url".into()],
+            "add" => vec![
+                "--name".into(),
+                "--mac".into(),
+                "--token".into(),
+                "--url".into(),
+            ],
             head => config
                 .as_ref()
                 .and_then(|c| c.resolve(head))
                 .filter(|_| prefix.len() == 1)
-                .map(|d| actions_for(&d.driver).iter().map(|s| s.to_string()).collect())
+                .map(|d| {
+                    actions_for(&d.driver)
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect()
+                })
                 .unwrap_or_default(),
         }
     };
@@ -131,7 +143,8 @@ mod tests {
     /// A registry in its own directory, named after the calling line so
     /// tests running as threads in one process cannot collide.
     fn registry(tag: u32) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("d3home-complete-{}-{tag}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("d3home-complete-{}-{tag}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
         std::fs::write(
@@ -151,7 +164,10 @@ mod tests {
         let path = registry(line!());
         let got = candidates(&words(&[""]), &path);
         for expected in ["add", "discover", "devices", "kettle", "k"] {
-            assert!(got.contains(&expected.to_string()), "{expected} missing from {got:?}");
+            assert!(
+                got.contains(&expected.to_string()),
+                "{expected} missing from {got:?}"
+            );
         }
     }
 
@@ -159,7 +175,10 @@ mod tests {
     fn an_alias_completes_to_its_devices_actions() {
         let path = registry(line!());
         // Completing after an alias must work exactly as after the name.
-        assert_eq!(candidates(&words(&["k", ""]), &path), candidates(&words(&["kettle", ""]), &path));
+        assert_eq!(
+            candidates(&words(&["k", ""]), &path),
+            candidates(&words(&["kettle", ""]), &path)
+        );
         assert!(candidates(&words(&["k", ""]), &path).contains(&"watch".to_string()));
     }
 
@@ -168,20 +187,29 @@ mod tests {
         let path = registry(line!());
         assert_eq!(
             candidates(&words(&["kettle", "st"]), &path),
-            vec!["start".to_string(), "status".to_string(), "stop".to_string()]
+            vec![
+                "start".to_string(),
+                "status".to_string(),
+                "stop".to_string()
+            ]
         );
     }
 
     #[test]
     fn a_dash_offers_the_global_flags() {
         let path = registry(line!());
-        assert!(candidates(&words(&["kettle", "status", "--"]), &path).contains(&"--json".to_string()));
+        assert!(
+            candidates(&words(&["kettle", "status", "--"]), &path).contains(&"--json".to_string())
+        );
     }
 
     #[test]
     fn a_missing_registry_still_completes_the_builtins() {
         // A broken or absent config must never make the shell feel broken.
-        let got = candidates(&words(&[""]), std::path::Path::new("/nonexistent/devices.toml"));
+        let got = candidates(
+            &words(&[""]),
+            std::path::Path::new("/nonexistent/devices.toml"),
+        );
         assert!(got.contains(&"add".to_string()), "got {got:?}");
     }
 

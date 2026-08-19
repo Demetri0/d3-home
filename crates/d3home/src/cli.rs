@@ -36,16 +36,27 @@ pub enum ExitCode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Builtin {
     /// Register a device: from a share link, from prompts, or from flags.
-    Add { args: Vec<String> },
+    Add {
+        args: Vec<String>,
+    },
     /// Print a shell's completion script.
-    Completions { shell: String },
+    Completions {
+        shell: String,
+    },
     /// Answer the completion script's question. Hidden: it exists for the
     /// shell, not for a person, so it is kept out of the help text.
-    Complete { words: Vec<String> },
+    Complete {
+        words: Vec<String>,
+    },
     Discover,
     Devices,
-    AliasAdd { alias: String, device: String },
-    AliasRm { alias: String },
+    AliasAdd {
+        alias: String,
+        device: String,
+    },
+    AliasRm {
+        alias: String,
+    },
     Help,
 }
 
@@ -146,16 +157,27 @@ pub fn parse(args: &[String]) -> Result<Parsed, UsageError> {
         .ok_or_else(|| UsageError("no command given; try 'd3home help'".into()))?;
 
     if !RESERVED.contains(&head.as_str()) {
-        return Ok(Parsed::Device { device: head.clone(), action: rest.to_vec() });
+        return Ok(Parsed::Device {
+            device: head.clone(),
+            action: rest.to_vec(),
+        });
     }
 
     match head.as_str() {
-        "add" => Ok(Parsed::Builtin(Builtin::Add { args: rest.to_vec() })),
+        "add" => Ok(Parsed::Builtin(Builtin::Add {
+            args: rest.to_vec(),
+        })),
         "completions" => match rest {
-            [shell] => Ok(Parsed::Builtin(Builtin::Completions { shell: shell.clone() })),
-            _ => Err(UsageError("usage: d3home completions <bash|zsh|fish>".into())),
+            [shell] => Ok(Parsed::Builtin(Builtin::Completions {
+                shell: shell.clone(),
+            })),
+            _ => Err(UsageError(
+                "usage: d3home completions <bash|zsh|fish>".into(),
+            )),
         },
-        "__complete" => Ok(Parsed::Builtin(Builtin::Complete { words: rest.to_vec() })),
+        "__complete" => Ok(Parsed::Builtin(Builtin::Complete {
+            words: rest.to_vec(),
+        })),
         "discover" => Ok(Parsed::Builtin(Builtin::Discover)),
         "devices" => Ok(Parsed::Builtin(Builtin::Devices)),
         "help" => Ok(Parsed::Builtin(Builtin::Help)),
@@ -173,10 +195,13 @@ pub fn parse(args: &[String]) -> Result<Parsed, UsageError> {
 
 fn parse_alias(rest: &[String]) -> Result<Parsed, UsageError> {
     match rest {
-        [cmd, alias, device] if cmd == "add" => {
-            Ok(Parsed::Builtin(Builtin::AliasAdd { alias: alias.clone(), device: device.clone() }))
-        }
-        [cmd, alias] if cmd == "rm" => Ok(Parsed::Builtin(Builtin::AliasRm { alias: alias.clone() })),
+        [cmd, alias, device] if cmd == "add" => Ok(Parsed::Builtin(Builtin::AliasAdd {
+            alias: alias.clone(),
+            device: device.clone(),
+        })),
+        [cmd, alias] if cmd == "rm" => Ok(Parsed::Builtin(Builtin::AliasRm {
+            alias: alias.clone(),
+        })),
         _ => Err(UsageError(
             "usage: d3home alias add <alias> <device> | d3home alias rm <alias>".into(),
         )),
@@ -337,7 +362,6 @@ impl From<std::io::Error> for AppError {
 mod tests {
     use super::*;
 
-
     #[test]
     fn a_global_flag_is_honoured_wherever_it_appears() {
         // The motivating bug: `--json` after the action was silently dropped,
@@ -350,16 +374,24 @@ mod tests {
         ] {
             let (globals, rest) = split_globals(&argv).expect("parses");
             assert!(globals.json, "--json lost in {argv:?}");
-            assert!(!rest.contains(&"--json".to_string()), "--json leaked into words");
+            assert!(
+                !rest.contains(&"--json".to_string()),
+                "--json leaked into words"
+            );
         }
     }
 
     #[test]
     fn a_flag_taking_a_value_accepts_both_spellings_anywhere() {
-        let (a, rest_a) = split_globals(&words(&["kettle", "status", "--config", "/tmp/x.toml"])).unwrap();
-        let (b, rest_b) = split_globals(&words(&["--config=/tmp/x.toml", "kettle", "status"])).unwrap();
+        let (a, rest_a) =
+            split_globals(&words(&["kettle", "status", "--config", "/tmp/x.toml"])).unwrap();
+        let (b, rest_b) =
+            split_globals(&words(&["--config=/tmp/x.toml", "kettle", "status"])).unwrap();
 
-        assert_eq!(a.config.as_deref(), Some(std::path::Path::new("/tmp/x.toml")));
+        assert_eq!(
+            a.config.as_deref(),
+            Some(std::path::Path::new("/tmp/x.toml"))
+        );
         assert_eq!(a.config, b.config);
         assert_eq!(rest_a, words(&["kettle", "status"]));
         assert_eq!(rest_b, rest_a);
@@ -382,22 +414,36 @@ mod tests {
 
     #[test]
     fn a_double_dash_lets_a_literal_flag_through_as_a_word() {
-        let (globals, rest) = split_globals(&words(&["alias", "add", "--", "--json", "kettle"])).unwrap();
+        let (globals, rest) =
+            split_globals(&words(&["alias", "add", "--", "--json", "kettle"])).unwrap();
         assert!(!globals.json, "after -- it is a word, not a flag");
         assert_eq!(rest, words(&["alias", "add", "--json", "kettle"]));
     }
 
-
     #[test]
     fn version_is_recognised_from_any_position() {
-        for argv in [words(&["--version"]), words(&["kettle", "-V"]), words(&["kettle", "status", "--version"])] {
-            assert!(split_globals(&argv).unwrap().0.version, "version lost in {argv:?}");
+        for argv in [
+            words(&["--version"]),
+            words(&["kettle", "-V"]),
+            words(&["kettle", "status", "--version"]),
+        ] {
+            assert!(
+                split_globals(&argv).unwrap().0.version,
+                "version lost in {argv:?}"
+            );
         }
     }
     #[test]
     fn help_is_recognised_from_any_position() {
-        for argv in [words(&["--help"]), words(&["kettle", "-h"]), words(&["kettle", "status", "--help"])] {
-            assert!(split_globals(&argv).unwrap().0.help, "help lost in {argv:?}");
+        for argv in [
+            words(&["--help"]),
+            words(&["kettle", "-h"]),
+            words(&["kettle", "status", "--help"]),
+        ] {
+            assert!(
+                split_globals(&argv).unwrap().0.help,
+                "help lost in {argv:?}"
+            );
         }
     }
 
@@ -410,7 +456,10 @@ mod tests {
         let parsed = parse(&words(&["kettle", "start", "80"])).unwrap();
         assert_eq!(
             parsed,
-            Parsed::Device { device: "kettle".into(), action: vec!["start".into(), "80".into()] }
+            Parsed::Device {
+                device: "kettle".into(),
+                action: vec!["start".into(), "80".into()]
+            }
         );
     }
 
@@ -419,21 +468,39 @@ mod tests {
         // cli::parse never sees the config, so it cannot know "k" is an
         // alias rather than a device name -- and does not need to.
         let parsed = parse(&words(&["k", "status"])).unwrap();
-        assert_eq!(parsed, Parsed::Device { device: "k".into(), action: vec!["status".into()] });
+        assert_eq!(
+            parsed,
+            Parsed::Device {
+                device: "k".into(),
+                action: vec!["status".into()]
+            }
+        );
     }
 
     #[test]
     fn recognizes_every_builtin() {
-        assert_eq!(parse(&words(&["discover"])).unwrap(), Parsed::Builtin(Builtin::Discover));
-        assert_eq!(parse(&words(&["devices"])).unwrap(), Parsed::Builtin(Builtin::Devices));
-        assert_eq!(parse(&words(&["help"])).unwrap(), Parsed::Builtin(Builtin::Help));
+        assert_eq!(
+            parse(&words(&["discover"])).unwrap(),
+            Parsed::Builtin(Builtin::Discover)
+        );
+        assert_eq!(
+            parse(&words(&["devices"])).unwrap(),
+            Parsed::Builtin(Builtin::Devices)
+        );
+        assert_eq!(
+            parse(&words(&["help"])).unwrap(),
+            Parsed::Builtin(Builtin::Help)
+        );
     }
 
     #[test]
     fn parses_alias_add_and_rm() {
         assert_eq!(
             parse(&words(&["alias", "add", "k", "kettle"])).unwrap(),
-            Parsed::Builtin(Builtin::AliasAdd { alias: "k".into(), device: "kettle".into() })
+            Parsed::Builtin(Builtin::AliasAdd {
+                alias: "k".into(),
+                device: "kettle".into()
+            })
         );
         assert_eq!(
             parse(&words(&["alias", "rm", "k"])).unwrap(),
@@ -455,10 +522,22 @@ mod tests {
 
     #[test]
     fn every_syncleo_error_maps_to_its_own_exit_code() {
-        assert_eq!(AppError::from(syncleo::Error::Timeout).exit_code(), ExitCode::Timeout);
-        assert_eq!(AppError::from(syncleo::Error::Silence).exit_code(), ExitCode::Timeout);
-        assert_eq!(AppError::from(syncleo::Error::HandshakeRejected).exit_code(), ExitCode::BadToken);
-        assert_eq!(AppError::from(syncleo::Error::NoUsableAddress).exit_code(), ExitCode::NotFound);
+        assert_eq!(
+            AppError::from(syncleo::Error::Timeout).exit_code(),
+            ExitCode::Timeout
+        );
+        assert_eq!(
+            AppError::from(syncleo::Error::Silence).exit_code(),
+            ExitCode::Timeout
+        );
+        assert_eq!(
+            AppError::from(syncleo::Error::HandshakeRejected).exit_code(),
+            ExitCode::BadToken
+        );
+        assert_eq!(
+            AppError::from(syncleo::Error::NoUsableAddress).exit_code(),
+            ExitCode::NotFound
+        );
         assert_eq!(
             AppError::from(syncleo::Error::LinkLocalAddressWithoutScope).exit_code(),
             ExitCode::Usage

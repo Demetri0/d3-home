@@ -47,7 +47,10 @@ pub struct Frame {
 impl Frame {
     pub fn new(seq: u8, ty: FrameType, payload: Vec<u8>) -> Self {
         let len = payload.len() as u16;
-        Self { head: FrameHead { seq, ty, len }, payload }
+        Self {
+            head: FrameHead { seq, ty, len },
+            payload,
+        }
     }
 
     pub fn parse(buf: &[u8]) -> Result<Self, CodecError> {
@@ -59,9 +62,15 @@ impl Frame {
         let len = u16::from_le_bytes([buf[2], buf[3]]);
         let payload = &buf[HEAD_LEN..];
         if payload.len() != len as usize {
-            return Err(CodecError::LengthMismatch { declared: len, actual: payload.len() });
+            return Err(CodecError::LengthMismatch {
+                declared: len,
+                actual: payload.len(),
+            });
         }
-        Ok(Self { head: FrameHead { seq, ty, len }, payload: payload.to_vec() })
+        Ok(Self {
+            head: FrameHead { seq, ty, len },
+            payload: payload.to_vec(),
+        })
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -99,12 +108,18 @@ mod tests {
         assert_eq!(frame.to_bytes(), buf);
 
         buf.truncate(4);
-        assert!(Frame::parse(&buf).is_err(), "declared length must be honoured");
+        assert!(
+            Frame::parse(&buf).is_err(),
+            "declared length must be honoured"
+        );
     }
 
     #[test]
     fn rejects_a_frame_shorter_than_its_header() {
-        assert!(matches!(Frame::parse(&[0x01, 0x02, 0x03]), Err(CodecError::ShortFrame)));
+        assert!(matches!(
+            Frame::parse(&[0x01, 0x02, 0x03]),
+            Err(CodecError::ShortFrame)
+        ));
     }
 
     #[test]
@@ -112,13 +127,19 @@ mod tests {
         let buf = vec![0x00, 0x01, 0xFF, 0x00, 0x01, 0x02];
         assert!(matches!(
             Frame::parse(&buf),
-            Err(CodecError::LengthMismatch { declared: 255, actual: 2 })
+            Err(CodecError::LengthMismatch {
+                declared: 255,
+                actual: 2
+            })
         ));
     }
 
     #[test]
     fn rejects_an_unknown_frame_type() {
         let buf = vec![0x00, 0x09, 0x00, 0x00];
-        assert!(matches!(Frame::parse(&buf), Err(CodecError::UnknownFrameType(9))));
+        assert!(matches!(
+            Frame::parse(&buf),
+            Err(CodecError::UnknownFrameType(9))
+        ));
     }
 }

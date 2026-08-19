@@ -129,7 +129,12 @@ impl Session {
 
         let seq = session.take_seq();
         let bytes = handshake_frame(&session.keys, seq, &our_public_wire, &token).to_bytes();
-        session.pending = Some(Pending { seq, bytes: bytes.clone(), sent_at: now, attempts: 1 });
+        session.pending = Some(Pending {
+            seq,
+            bytes: bytes.clone(),
+            sent_at: now,
+            attempts: 1,
+        });
 
         (session, vec![Action::Send(bytes)])
     }
@@ -155,7 +160,12 @@ impl Session {
     fn queue_command(&mut self, body: &[u8], now: Millis) -> Vec<u8> {
         let seq = self.take_seq();
         let bytes = encrypt_frame(&self.keys, seq, FrameType::Cmd, body).to_bytes();
-        self.pending = Some(Pending { seq, bytes: bytes.clone(), sent_at: now, attempts: 1 });
+        self.pending = Some(Pending {
+            seq,
+            bytes: bytes.clone(),
+            sent_at: now,
+            attempts: 1,
+        });
         bytes
     }
 
