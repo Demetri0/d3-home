@@ -8,6 +8,7 @@ mod commands;
 mod config;
 mod output;
 mod progress;
+mod style;
 
 use std::path::Path;
 

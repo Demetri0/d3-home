@@ -12,6 +12,7 @@ use syncleo::codec::command::{Event, PowerMode, decode_diagnostic};
 use syncleo::discovery::Found;
 
 use crate::config::{Config, hex_encode};
+use crate::style::Style;
 
 fn mode_str(mode: PowerMode) -> &'static str {
     match mode {
@@ -57,7 +58,62 @@ fn write_line(line: &str) -> std::io::Result<()> {
 
 /// Print everything a [`crate::commands::kettle`] status check learned
 /// about the device, either as one JSON object or as human-readable lines.
-pub fn print_state(state: &DeviceState, json: bool) {
+/// A temperature for the rich view. A target of zero is the device saying
+/// it has none set, not a request to chill the water to freezing, so it
+/// reads as an em dash rather than a number.
+fn fmt_rich_temperature(t: Option<u8>, zero_is_none: bool) -> String {
+    match t {
+        Some(0) if zero_is_none => "\u{2014}".to_string(),
+        Some(v) => format!("{v} \u{00b0}C"),
+        None => "unknown".to_string(),
+    }
+}
+
+/// The status block a capable terminal gets: a heading naming the device
+/// and what it is doing, then the readings, indented so the eye can find
+/// the numbers without reading the labels.
+fn state_rich(state: &DeviceState, device: &str, style: Style) -> String {
+    let mode = state.mode.map(mode_str).unwrap_or("unknown");
+    let dot = match state.mode {
+        Some(PowerMode::Off) | None => style.dim("\u{25cf}"),
+        Some(_) if state.error == Some(true) => style.red("\u{25cf}"),
+        Some(_) => style.green("\u{25cf}"),
+    };
+
+    let mut out = String::from("\n  ");
+    out.push_str(&style.bold(device));
+    out.push_str("   ");
+    out.push_str(&dot);
+    out.push(' ');
+    out.push_str(mode);
+    if let Some(target) = state.target_temperature.filter(|_| state.mode != Some(PowerMode::Off)) {
+        out.push_str(&style.dim(&format!(" \u{2192} {target} \u{00b0}C")));
+    }
+    out.push_str("\n\n");
+
+    let rows: [(&str, String); 4] = [
+        ("temperature", fmt_rich_temperature(state.current_temperature, false)),
+        ("target", fmt_rich_temperature(state.target_temperature, true)),
+        ("child lock", fmt_flag(state.child_lock).to_string()),
+        (
+            "error",
+            match state.error {
+                Some(true) => style.red("yes"),
+                other => fmt_flag(other).to_string(),
+            },
+        ),
+    ];
+    for (label, value) in rows {
+        // Pad before painting: escape sequences have no width on screen but
+        // every byte counts to `{:<14}`, so colouring first would push the
+        // values out of line by exactly the length of the escape.
+        out.push_str(&format!("  {}{}\n", style.dim(&format!("{label:<14}")), value));
+    }
+    out.pop();
+    out
+}
+
+pub fn print_state(state: &DeviceState, device: &str, json: bool) {
     if json {
         // `volume` (code 9) stays in the JSON form even though, on the
         // evidence gathered so far, it is useless: it read 0 on an empty
@@ -88,11 +144,16 @@ pub fn print_state(state: &DeviceState, json: bool) {
         // annoying than the vendor app. The data itself is untouched --
         // `DeviceState::volume` and `Event::Volume` still carry it, `watch`
         // still prints it, and `--json` above still includes it.
-        let _ = write_line(&format!("mode:                {}", state.mode.map(mode_str).unwrap_or("unknown")));
-        let _ = write_line(&format!("current temperature: {}", fmt_temperature(state.current_temperature)));
-        let _ = write_line(&format!("target temperature:  {}", fmt_temperature(state.target_temperature)));
-        let _ = write_line(&format!("error:               {}", fmt_flag(state.error)));
-        let _ = write_line(&format!("child lock:          {}", fmt_flag(state.child_lock)));
+        let style = Style::detect();
+        if style.is_rich() {
+            let _ = write_line(&state_rich(state, device, style));
+        } else {
+            let _ = write_line(&format!("mode:                {}", state.mode.map(mode_str).unwrap_or("unknown")));
+            let _ = write_line(&format!("current temperature: {}", fmt_temperature(state.current_temperature)));
+            let _ = write_line(&format!("target temperature:  {}", fmt_temperature(state.target_temperature)));
+            let _ = write_line(&format!("error:               {}", fmt_flag(state.error)));
+            let _ = write_line(&format!("child lock:          {}", fmt_flag(state.child_lock)));
+        }
     }
 }
 
@@ -313,6 +374,48 @@ pub fn print_stopped(json: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_rich_status_block_lines_its_values_up() {
+        // Escape sequences have no width on screen but plenty in bytes, so
+        // padding has to happen before painting or the columns wander.
+        let state = DeviceState {
+            current_temperature: Some(78),
+            target_temperature: Some(0),
+            mode: Some(PowerMode::Off),
+            volume: Some(0),
+            error: Some(false),
+            child_lock: Some(false),
+        };
+        let block = state_rich(&state, "kettle", Style::Rich);
+
+        // Only the reading rows, which begin with a dim label. The heading
+        // also carries a dim escape (the status dot) and is not a column.
+        let columns: Vec<usize> = block
+            .lines()
+            .filter(|l| l.starts_with("  \u{1b}[2m"))
+            .filter_map(|l| l.find("\u{1b}[0m").map(|i| i + "\u{1b}[0m".len()))
+            .collect();
+        assert!(columns.len() >= 4, "expected the reading rows, got {block:?}");
+        assert!(columns.windows(2).all(|w| w[0] == w[1]), "values not aligned: {columns:?}");
+        assert!(block.contains("78 \u{00b0}C"));
+        assert!(block.contains('\u{2014}'), "a target of 0 should read as a dash: {block:?}");
+    }
+
+    #[test]
+    fn a_plain_terminal_gets_no_escape_sequences_in_the_status_block() {
+        let state = DeviceState {
+            current_temperature: Some(78),
+            target_temperature: Some(60),
+            mode: Some(PowerMode::On),
+            volume: Some(0),
+            error: Some(true),
+            child_lock: Some(false),
+        };
+        let block = state_rich(&state, "kettle", Style::Plain);
+        assert!(!block.contains('\u{1b}'), "escape leaked into plain output: {block:?}");
+        assert!(block.contains("78"), "the reading itself must survive: {block:?}");
+    }
     use std::net::Ipv4Addr;
     use syncleo::codec::command::Event;
 

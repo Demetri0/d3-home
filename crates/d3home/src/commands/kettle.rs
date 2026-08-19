@@ -95,7 +95,7 @@ fn status(device: &Device, json: bool, config_path: &Path) -> Result<(), AppErro
     let state = with_spinner(Phase::WaitingForState, || {
         client.collect_state(STATUS_QUIET_WINDOW, STATUS_OVERALL_DEADLINE)
     })?;
-    output::print_state(&state, json);
+    output::print_state(&state, &device.name, json);
 
     // The device has its own notion of an error condition (no water,
     // overheat, ...), separate from anything going wrong in the transport
