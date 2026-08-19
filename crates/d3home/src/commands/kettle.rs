@@ -9,7 +9,7 @@ use std::ops::ControlFlow;
 use std::path::Path;
 use std::time::Duration;
 
-use syncleo::client::Client;
+use syncleo::client::{Client, DeviceState};
 use syncleo::codec::command::{Command, PowerMode};
 use syncleo::discovery::{Discovery, Found, MdnsDiscovery};
 use syncleo::transport::{UdpTransport, socket_addr};
@@ -126,7 +126,14 @@ fn start(device: &Device, args: &[String], json: bool, config_path: &Path) -> Re
 
     // Only reached once the device acknowledged, so this reports what the
     // kettle agreed to do, not what we hoped it would.
-    output::print_heating_started(target.unwrap_or(BOIL_TEMPERATURE), json);
+    let state = read_back(&mut client)?;
+    if state.mode == Some(PowerMode::Off) {
+        return Err(refused(device, "start"));
+    }
+    output::print_heating_started(
+        state.target_temperature.unwrap_or_else(|| target.unwrap_or(BOIL_TEMPERATURE)),
+        json,
+    );
     Ok(())
 }
 
@@ -186,14 +193,49 @@ fn set(device: &Device, args: &[String], json: bool, config_path: &Path) -> Resu
         Ok(())
     })?;
 
+    let state = read_back(&mut client)?;
+    if state.target_temperature != Some(target) {
+        return Err(AppError::Device(format!(
+            "'{}' did not take {target} \u{00b0}C as its target; it reports {}",
+            device.name,
+            state
+                .target_temperature
+                .map_or_else(|| "nothing".to_string(), |t| format!("{t} \u{00b0}C"))
+        )));
+    }
     output::print_target_set(target, json);
     Ok(())
+}
+
+/// Read the device back after telling it something.
+///
+/// An acknowledgement means the frame arrived, not that the kettle agreed to
+/// act on it: a kettle with no water, or one that has been lifted off its
+/// base, acks perfectly well and then does nothing. Reporting "heating to
+/// 100 °C" on the strength of an ack is a claim we have not earned, so every
+/// command that changes something asks the device what actually happened.
+fn read_back(client: &mut Client) -> Result<DeviceState, AppError> {
+    with_spinner(Phase::WaitingForState, || {
+        client.collect_state(STATUS_QUIET_WINDOW, STATUS_OVERALL_DEADLINE)
+    })
+    .map_err(AppError::from)
+}
+
+fn refused(device: &Device, what: &str) -> AppError {
+    AppError::Device(format!(
+        "'{}' did not {what}; it may have no water in it, or be off its base",
+        device.name
+    ))
 }
 
 fn off(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
     let mut client = connect(device, config_path)?;
     with_spinner(Phase::Sending, || client.send(Command::Mode(PowerMode::Off)))?;
 
+    let state = read_back(&mut client)?;
+    if matches!(state.mode, Some(PowerMode::On) | Some(PowerMode::Custom)) {
+        return Err(refused(device, "stop"));
+    }
     output::print_stopped(json);
     Ok(())
 }

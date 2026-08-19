@@ -11,6 +11,7 @@ use syncleo::client::DeviceState;
 use syncleo::codec::command::{Event, PowerMode, decode_diagnostic};
 use syncleo::discovery::Found;
 
+use crate::bar::temperature_bar;
 use crate::config::{Config, Device, hex_encode};
 use crate::style::Style;
 
@@ -98,6 +99,14 @@ fn state_rich(state: &DeviceState, device: &Device, style: Style) -> String {
     }
     out.push_str("\n\n");
 
+    // Directly under the heading: the bar answers "how hot, and how far to
+    // go" at a glance, and the rows below are the detail behind it.
+    if let Some(current) = state.current_temperature {
+        let heating = matches!(state.mode, Some(PowerMode::On) | Some(PowerMode::Custom));
+        out.push_str(&temperature_bar(current, state.target_temperature, heating, style));
+        out.push_str("\n\n");
+    }
+
     let rows: [(&str, String); 4] = [
         ("Current temperature", fmt_rich_temperature(state.current_temperature, false)),
         ("Target temperature", fmt_rich_temperature(state.target_temperature, true)),
@@ -117,12 +126,6 @@ fn state_rich(state: &DeviceState, device: &Device, style: Style) -> String {
         out.push_str(&format!("  {}{}\n", style.dim(&format!("{label:<21}")), value));
     }
 
-    if let Some(current) = state.current_temperature {
-        let heating = matches!(state.mode, Some(PowerMode::On) | Some(PowerMode::Custom));
-        out.push('\n');
-        out.push_str(&temperature_bar(current, state.target_temperature, heating, style));
-        out.push('\n');
-    }
     out.pop();
     out
 }
@@ -267,56 +270,6 @@ fn event_human(event: &Event) -> String {
     }
 }
 
-/// Mark, in the printed event stream itself, the boundary between the
-/// session that just ended and the one about to begin. `watch` reconnects
-/// rather than exiting when the device goes away (see
-/// `commands::kettle::watch`), and the device replays its whole
-/// post-handshake state burst on every connection -- without a marker,
-/// that repeated block of events would read as a glitch (the same values
-/// reported twice) rather than what it is: a fresh session after the old
-/// one was lost.
-/// Same panic-avoidance and error-propagation reasoning as [`print_event`]:
-/// `Err` means the write failed (most commonly a broken pipe), and the
-/// caller decides what to do about it rather than this panicking on a
-/// downstream reader that has simply gone away.
-/// The temperature bar, shared by `watch` and `status`.
-///
-/// The scale is absolute, 0 to 100 °C, so a glance always means the same
-/// thing: the dots do not rescale when the target changes, and a kettle at
-/// 40 °C looks the same whether it is heading for 60 or for boiling.
-pub fn temperature_bar(current: u8, target: Option<u8>, heating: bool, style: Style) -> String {
-    const CELLS: usize = 25;
-    let cell_of = |t: u8| (usize::from(t) * CELLS).div_ceil(100).min(CELLS).saturating_sub(1);
-
-    let filled = cell_of(current);
-    let target_cell = target.map(cell_of);
-
-    let mut track = String::new();
-    for i in 0..CELLS {
-        if Some(i) == target_cell {
-            // The one thing worth finding at a glance.
-            track.push_str(&style.yellow("\u{25c9}"));
-        } else if i <= filled {
-            let dot = "\u{25cf}";
-            track.push_str(&if heating {
-                style.bright_green(dot)
-            } else {
-                // Idle, but the reading is still real -- bright enough to
-                // read as data rather than as disabled chrome.
-                style.bright_white(dot)
-            });
-        } else {
-            track.push_str(&style.dim("\u{00b7}"));
-        }
-    }
-
-    let mut out = format!("  {}  {track}", style.bold(&format!("{current} \u{00b0}C")));
-    if let Some(target) = target {
-        out.push_str(&format!("  {}", style.dim(&format!("{target} \u{00b0}C"))));
-    }
-    out
-}
-
 /// Renders a `watch` stream, keeping one live progress line at the bottom
 /// on a capable terminal.
 ///
@@ -430,6 +383,18 @@ impl WatchView {
     }
 }
 
+/// Mark, in the printed event stream itself, the boundary between the
+/// session that just ended and the one about to begin. `watch` reconnects
+/// rather than exiting when the device goes away (see
+/// `commands::kettle::watch`), and the device replays its whole
+/// post-handshake state burst on every connection -- without a marker,
+/// that repeated block of events would read as a glitch (the same values
+/// reported twice) rather than what it is: a fresh session after the old
+/// one was lost.
+/// Same panic-avoidance and error-propagation reasoning as [`print_event`]:
+/// `Err` means the write failed (most commonly a broken pipe), and the
+/// caller decides what to do about it rather than this panicking on a
+/// downstream reader that has simply gone away.
 pub fn print_watch_reconnected(json: bool) -> std::io::Result<()> {
     let line = if json { reconnected_json().to_string() } else { RECONNECTED_HUMAN.to_string() };
     write_line(&line)
@@ -563,45 +528,6 @@ mod tests {
 
     fn view_at(current: u8, target: Option<u8>, heating: bool) -> WatchView {
         WatchView { style: Style::Rich, json: false, target, current: Some(current), heating, live: false }
-    }
-
-    fn count(line: &str, glyph: char) -> usize {
-        line.matches(glyph).count()
-    }
-
-    #[test]
-    fn the_scale_is_absolute_so_the_same_reading_always_looks_the_same() {
-        // The dots must not rescale when the target changes: 40 °C is 40 °C
-        // whether the kettle is heading for 60 or for boiling.
-        let to_sixty = view_at(40, Some(60), true).bar(40).unwrap();
-        let to_boil = view_at(40, Some(100), true).bar(40).unwrap();
-        assert_eq!(count(&to_sixty, '\u{25cf}'), count(&to_boil, '\u{25cf}'));
-    }
-
-    #[test]
-    fn the_target_is_marked_with_a_ring_the_eye_can_find() {
-        let heating = view_at(40, Some(60), true).bar(40).unwrap();
-        assert_eq!(count(&heating, '\u{25c9}'), 1, "exactly one ring: {heating:?}");
-        assert!(heating.contains("\u{1b}[93m"), "the ring should stand out: {heating:?}");
-    }
-
-    #[test]
-    fn colour_says_whether_it_is_heating_not_the_shape() {
-        // Same temperature, same dots -- only the colour differs, so a
-        // glance at an idle kettle is never mistaken for a heat in progress.
-        let hot = view_at(76, Some(100), true).bar(76).unwrap();
-        let cold = view_at(76, Some(100), false).bar(76).unwrap();
-        assert_eq!(count(&hot, '\u{25cf}'), count(&cold, '\u{25cf}'));
-        assert!(hot.contains("\u{1b}[92m"), "heating should be green: {hot:?}");
-        assert!(cold.contains("\u{1b}[97m"), "idle should still read as data: {cold:?}");
-        assert!(!cold.contains("\u{1b}[92m"));
-    }
-
-    #[test]
-    fn a_kettle_that_has_not_named_a_target_still_gets_a_bar() {
-        let line = view_at(41, None, false).bar(41).unwrap();
-        assert_eq!(count(&line, '\u{25c9}'), 0, "no target, no ring: {line:?}");
-        assert!(line.contains("41"));
     }
 
     #[test]

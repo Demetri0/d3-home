@@ -3,6 +3,7 @@
 //! to the module that knows how to run it. Nothing about *how* a command
 //! behaves belongs here -- see `commands::registry` and `commands::kettle`.
 
+mod bar;
 mod cli;
 mod commands;
 mod config;

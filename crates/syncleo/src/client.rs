@@ -76,6 +76,12 @@ impl DeviceState {
 /// A blocking connection to one device: real sockets, real clock, driving a
 /// pure [`Session`].
 pub struct Client {
+    /// Everything the device has said so far, from any pump, not just the
+    /// ones a caller was listening to. Events arrive unbidden -- the whole
+    /// post-handshake burst lands while a command is waiting for its
+    /// acknowledgement -- and throwing them away meant the next reader had
+    /// to ask the device to repeat itself, which it has no reason to do.
+    state: DeviceState,
     transport: Box<dyn Transport>,
     session: Session,
     start: Instant,
@@ -103,7 +109,7 @@ impl Client {
         let start = Instant::now();
         let (session, actions) = Session::new(our_private, device_public_wire, token, Millis(0));
 
-        let mut client = Client { transport, session, start };
+        let mut client = Client { transport, session, start, state: DeviceState::default() };
         client.perform(&actions)?;
 
         let deadline = start + timeout;
@@ -182,7 +188,7 @@ impl Client {
         if let Some(err) = self.already_lost() {
             return Err(err);
         }
-        let mut state = DeviceState::default();
+        let mut state = self.state.clone();
         let overall_deadline = Instant::now() + overall;
         // Set once the first event of any kind arrives; from then on it is
         // pushed forward on every further event, and closing in on it (as
@@ -316,6 +322,14 @@ impl Client {
             None => self.session.step(Input::Tick, now),
         };
         self.perform(&actions)?;
+        // Record before handing them on: events arrive unbidden, and the
+        // caller that happens to be pumping is not necessarily the one that
+        // wanted them.
+        for action in &actions {
+            if let Action::Emit(event) = action {
+                self.state.apply(event.clone());
+            }
+        }
         Ok(actions)
     }
 }
@@ -328,7 +342,7 @@ impl Client {
     /// `Session`'s module doc comment) and then exercise `Client`'s
     /// already-dead guard without waiting out any real deadline.
     fn from_parts(transport: Box<dyn Transport>, session: Session) -> Client {
-        Client { transport, session, start: Instant::now() }
+        Client { transport, session, start: Instant::now(), state: DeviceState::default() }
     }
 }
 

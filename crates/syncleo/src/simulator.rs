@@ -14,7 +14,7 @@
 //! on the pure-session side.
 
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -63,6 +63,9 @@ pub struct SimulatedState {
 /// take a single shared reference instead of a growing list of
 /// individually-threaded flags.
 struct Shared {
+    /// Sequence numbers for frames the device sends of its own accord.
+    /// Starts clear of the post-handshake burst, which numbers itself 1..6.
+    next_seq: AtomicU8,
     state: Mutex<SimulatedState>,
     /// From now on, silently drop every `Cmd` frame from an established
     /// peer instead of acknowledging it. See `KettleHandle::ignore_commands`.
@@ -224,6 +227,7 @@ impl KettleSimulator {
         let addr = socket.local_addr()?;
 
         let shared = Arc::new(Shared {
+            next_seq: AtomicU8::new(100),
             state: Mutex::new(SimulatedState {
                 mode: PowerMode::Off,
                 target: 100,
@@ -447,6 +451,13 @@ fn report_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, sh
 /// here specifically: `Ack` and `Nak` carry identical ciphertext for a
 /// given sequence, so a check that only asked "does this decrypt cleanly"
 /// could not tell the two apart.
+/// A sequence number for an unbidden report, wrapping clear of the burst's
+/// own fixed numbering.
+fn next_seq(shared: &Shared) -> u8 {
+    let seq = shared.next_seq.fetch_add(1, Ordering::SeqCst);
+    if seq < 100 { 100 } else { seq }
+}
+
 fn handle_established(socket: &UdpSocket, peer: &Peer, frame: &Frame, shared: &Shared) {
     match frame.head.ty {
         FrameType::Cmd => {
@@ -470,11 +481,47 @@ fn handle_established(socket: &UdpSocket, peer: &Peer, frame: &Frame, shared: &S
             let _ = socket.send_to(&ack, peer.addr);
 
             if let Ok(event) = Event::decode(&body) {
-                let mut s = shared.state.lock().expect("state lock poisoned");
-                match event {
-                    Event::Mode(m) => s.mode = m,
-                    Event::TargetTemperature(t) => s.target = t,
-                    _ => {}
+                let echo = {
+                    let mut s = shared.state.lock().expect("state lock poisoned");
+                    match event {
+                        Event::Mode(m) => {
+                            s.mode = m;
+                            // `On` is "boil", and the device treats it as
+                            // setting the target to 100 as well -- observed
+                            // on the real kettle, where a bare start after
+                            // an earlier `start 45` reported a target of 100.
+                            if m == PowerMode::On {
+                                s.target = 100;
+                            }
+                            Some(vec![ty::MODE, m.as_u8()])
+                        }
+                        Event::TargetTemperature(t) => {
+                            s.target = t;
+                            Some(vec![ty::TARGET_TEMPERATURE, t, 0])
+                        }
+                        _ => None,
+                    }
+                };
+                // The real device reports a change once it has taken effect
+                // -- a boil ending shows up as an unbidden `mode: off` -- and
+                // that report is the only way a caller can tell "the frame
+                // arrived" from "the kettle agreed". Without it here, the
+                // simulator would let a command look accepted that a real
+                // kettle might have quietly ignored.
+                if let Some(body) = echo {
+                    let seq = next_seq(shared);
+                    let frame = encrypt_frame(&peer.keys, seq, FrameType::Cmd, &body).to_bytes();
+                    let _ = socket.send_to(&frame, peer.addr);
+
+                    // A mode change can move the target with it; report the
+                    // target too, so a reader is not left with a stale one.
+                    if body[0] == ty::MODE {
+                        let target = shared.state.lock().expect("state lock poisoned").target;
+                        let seq = next_seq(shared);
+                        let body = vec![ty::TARGET_TEMPERATURE, target, 0];
+                        let frame = encrypt_frame(&peer.keys, seq, FrameType::Cmd, &body).to_bytes();
+                        let _ = socket.send_to(&frame, peer.addr);
+                    }
                 }
             }
         }
