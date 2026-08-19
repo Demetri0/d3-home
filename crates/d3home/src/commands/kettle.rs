@@ -236,6 +236,7 @@ fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError
     let mut device = device.clone();
     let (mut client, cached) = connect_with(&device, config_path, MdnsDiscovery::new)?;
     let mut view = output::WatchView::new(json);
+    view.start();
     device.cached = Some(cached);
 
     loop {

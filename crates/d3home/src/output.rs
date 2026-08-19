@@ -278,6 +278,11 @@ pub struct WatchView {
     style: Style,
     json: bool,
     target: Option<u8>,
+    current: Option<u8>,
+    /// Whether the kettle is actually heating. The device keeps its target
+    /// while switched off, so a bar drawn from the target alone would
+    /// promise a heat that is not happening.
+    heating: bool,
     /// The reading this heat started from, so the bar has a low end that
     /// means something rather than an invented zero.
     started_at: Option<u8>,
@@ -286,53 +291,83 @@ pub struct WatchView {
 
 impl WatchView {
     pub fn new(json: bool) -> Self {
-        Self { style: Style::detect(), json, target: None, started_at: None, live: false }
+        Self {
+            style: Style::detect(),
+            json,
+            target: None,
+            current: None,
+            heating: false,
+            started_at: None,
+            live: false,
+        }
     }
 
     fn animated(&self) -> bool {
         self.style.is_rich() && !self.json
     }
 
-    /// Erase the live line, if there is one, so ordinary output can be
-    /// written without landing on top of it.
-    fn clear_live(&mut self) -> std::io::Result<()> {
+    /// Put the bar on screen before anything has arrived, so the user sees
+    /// straight away that something is being watched rather than staring at
+    /// a blank terminal until the kettle happens to say something.
+    pub fn start(&mut self) {
+        if self.animated() {
+            self.redraw();
+        }
+    }
+
+    /// Erase the live line so ordinary output can be written without
+    /// landing on top of it.
+    fn clear_live(&mut self) {
         if self.live {
             self.live = false;
-            print!("\r{:width$}\r", "", width = 48);
-            std::io::Write::flush(&mut std::io::stdout())?;
+            print!("\r{:width$}\r", "", width = 56);
+            let _ = std::io::Write::flush(&mut std::io::stdout());
         }
-        Ok(())
+    }
+
+    /// Draw the bar as the last thing on screen.
+    fn redraw(&mut self) {
+        self.clear_live();
+        print!("\r{}", self.status_line());
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        self.live = true;
     }
 
     pub fn event(&mut self, event: &Event) -> std::io::Result<()> {
         match event {
             Event::TargetTemperature(t) => self.target = Some(*t),
-            Event::Mode(PowerMode::Off) => {
-                self.target = None;
-                self.started_at = None;
+            Event::CurrentTemperature(t) => {
+                self.current = Some(*t);
+                if self.started_at.is_none() {
+                    self.started_at = Some(*t);
+                }
+            }
+            Event::Mode(mode) => {
+                self.heating = *mode != PowerMode::Off;
+                if !self.heating {
+                    self.started_at = None;
+                }
             }
             _ => {}
         }
 
-        if let (true, Event::CurrentTemperature(current)) = (self.animated(), event) {
-            if self.started_at.is_none() {
-                self.started_at = Some(*current);
-            }
-            if let Some(line) = self.progress_line(*current) {
-                self.clear_live()?;
-                print!("\r{line}");
-                std::io::Write::flush(&mut std::io::stdout())?;
-                self.live = true;
-                return Ok(());
-            }
+        if !self.animated() {
+            return print_event(event, self.json);
         }
 
-        self.clear_live()?;
-        print_event(event, self.json)
+        // Temperature arrives once per degree; on a terminal those belong in
+        // the bar, not as sixty near-identical lines. Everything else is news
+        // and gets a line of its own, printed above the bar.
+        if !matches!(event, Event::CurrentTemperature(_)) {
+            self.clear_live();
+            print_event(event, self.json)?;
+        }
+        self.redraw();
+        Ok(())
     }
 
-    /// Called when the stream ends, so the last live line is not left
-    /// dangling without a newline.
+    /// Called when the stream ends, so the bar is not left dangling without
+    /// a newline.
     pub fn finish(&mut self) {
         if self.live {
             self.live = false;
@@ -340,7 +375,26 @@ impl WatchView {
         }
     }
 
-    fn progress_line(&self, current: u8) -> Option<String> {
+    /// The bar, or the best summary available so far.
+    fn status_line(&self) -> String {
+        let current = match self.current {
+            Some(current) => current,
+            None => return format!("  {}", self.style.dim("waiting for the kettle...")),
+        };
+        let reading = self.style.bold(&format!("{current} \u{00b0}C"));
+
+        match self.bar(current) {
+            Some(bar) => bar,
+            // No target to aim at -- an idle kettle, or one that has not said
+            // yet. Showing the reading alone beats inventing an endpoint.
+            None => format!("  {reading}"),
+        }
+    }
+
+    fn bar(&self, current: u8) -> Option<String> {
+        if !self.heating {
+            return None;
+        }
         let target = self.target?;
         let from = self.started_at.unwrap_or(current).min(current);
         if target <= from {
@@ -472,11 +526,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_idle_kettle_gets_no_bar_even_though_it_remembers_a_target() {
+        // The device keeps its last target while switched off. A bar drawn
+        // from that alone promises a heat that is not happening.
+        let mut view = WatchView::new(false);
+        view.style = Style::Rich;
+        view.event(&Event::TargetTemperature(100)).unwrap();
+        view.event(&Event::Mode(PowerMode::Off)).unwrap();
+        view.event(&Event::CurrentTemperature(82)).unwrap();
+
+        let line = view.status_line();
+        assert!(!line.contains('\u{2591}'), "bar drawn for an off kettle: {line:?}");
+        assert!(line.contains("82"), "the reading should still show: {line:?}");
+
+        view.event(&Event::Mode(PowerMode::On)).unwrap();
+        view.event(&Event::CurrentTemperature(83)).unwrap();
+        assert!(view.status_line().contains('\u{2591}'), "bar missing once heating");
+        view.finish();
+    }
+
+    #[test]
+    fn the_bar_is_on_screen_before_the_kettle_has_said_anything() {
+        // Staring at a blank terminal until the device happens to speak is
+        // indistinguishable from the tool being broken.
+        let view = WatchView::new(false);
+        let line = view.status_line();
+        assert!(!line.trim().is_empty(), "nothing to show at start");
+        assert!(line.contains("waiting"), "got {line:?}");
+    }
+
+    #[test]
+    fn a_reading_without_a_target_still_shows_the_temperature() {
+        let mut view = WatchView { style: Style::Rich, json: false, target: None, current: Some(41), heating: false, started_at: Some(41), live: false };
+        assert!(view.status_line().contains("41"), "reading lost: {:?}", view.status_line());
+        assert!(view.bar(41).is_none(), "no target means no bar");
+        view.finish();
+    }
+
+    #[test]
+    fn every_event_keeps_the_bar_as_the_last_thing_drawn() {
+        // The point of the change: the bar must not vanish between
+        // temperature readings, so any event redraws it.
+        let mut view = WatchView { style: Style::Rich, json: false, target: Some(60), current: Some(50), heating: true, started_at: Some(40), live: false };
+        view.event(&Event::Backlight(true)).unwrap();
+        assert!(view.live, "an unrelated event left no bar behind");
+        view.finish();
+    }
+
+    #[test]
     fn the_heating_bar_fills_as_the_temperature_climbs() {
-        let mut view = WatchView { style: Style::Rich, json: false, target: Some(60), started_at: Some(40), live: false };
-        let empty = view.progress_line(40).expect("a bar at the start");
-        let half = view.progress_line(50).expect("a bar halfway");
-        let full = view.progress_line(60).expect("a bar at the target");
+        let mut view = WatchView { style: Style::Rich, json: false, target: Some(60), current: Some(40), heating: true, started_at: Some(40), live: false };
+        let empty = view.bar(40).expect("a bar at the start");
+        let half = view.bar(50).expect("a bar halfway");
+        let full = view.bar(60).expect("a bar at the target");
 
         let filled = |s: &str| s.matches('\u{2588}').count();
         assert_eq!(filled(&empty), 0);
@@ -490,11 +592,11 @@ mod tests {
     fn there_is_no_bar_without_a_target_to_aim_at() {
         // Off, or freshly connected and not told a target yet: a bar with an
         // invented endpoint would be a guess dressed up as information.
-        let view = WatchView { style: Style::Rich, json: false, target: None, started_at: None, live: false };
-        assert!(view.progress_line(40).is_none());
+        let view = WatchView { style: Style::Rich, json: false, target: None, current: None, heating: false, started_at: None, live: false };
+        assert!(view.bar(40).is_none());
 
-        let cooling = WatchView { style: Style::Rich, json: false, target: Some(40), started_at: Some(60), live: false };
-        assert!(cooling.progress_line(60).is_none(), "nothing to fill when already past the target");
+        let cooling = WatchView { style: Style::Rich, json: false, target: Some(40), current: Some(60), heating: true, started_at: Some(60), live: false };
+        assert!(cooling.bar(60).is_none(), "nothing to fill when already past the target");
     }
 
     #[test]
@@ -502,10 +604,10 @@ mod tests {
         // Something is parsing those, so they must not be collapsed into a
         // single redrawn line.
         for (style, json) in [(Style::Plain, false), (Style::Rich, true), (Style::Plain, true)] {
-            let view = WatchView { style, json, target: Some(60), started_at: Some(40), live: false };
+            let view = WatchView { style, json, target: Some(60), current: Some(40), heating: true, started_at: Some(40), live: false };
             assert!(!view.animated(), "style {style:?} json {json} should not animate");
         }
-        let rich = WatchView { style: Style::Rich, json: false, target: Some(60), started_at: Some(40), live: false };
+        let rich = WatchView { style: Style::Rich, json: false, target: Some(60), current: Some(40), heating: true, started_at: Some(40), live: false };
         assert!(rich.animated());
     }
 
