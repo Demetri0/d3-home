@@ -5,6 +5,8 @@
 //! project's 148 in total. Doubling the dependency tree to show a popup is a
 //! bad trade, and the platform incantations are three lines each.
 
+use std::process::{Command, Stdio};
+
 /// A way of putting a notification on a screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
@@ -60,9 +62,248 @@ fn on_path(name: &str) -> bool {
     std::env::split_paths(&path).any(|dir| dir.join(name).is_file())
 }
 
+/// One thing worth telling somebody about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notification {
+    pub event: &'static str,
+    pub device: String,
+    pub title: String,
+    pub body: String,
+    pub temperature: Option<u8>,
+    pub target: Option<u8>,
+}
+
+/// Build the command for a built-in backend, without running it.
+pub fn backend_command(backend: Backend, n: &Notification) -> Command {
+    let mut command = Command::new(backend.binary());
+    match backend {
+        Backend::NotifySend => {
+            command.args([n.title.as_str(), n.body.as_str()]);
+        }
+        Backend::KdialogPassive => {
+            command.args(["--title", &n.title, "--passivepopup", &n.body, "10"]);
+        }
+        Backend::Zenity => {
+            command.args(["--notification", &format!("--text={}: {}", n.title, n.body)]);
+        }
+        Backend::Osascript => {
+            command.args([
+                "-e",
+                &format!(
+                    "display notification {} with title {}",
+                    quote_applescript(&n.body),
+                    quote_applescript(&n.title)
+                ),
+            ]);
+        }
+        Backend::PowerShell => {
+            command.args(["-NoProfile", "-Command", &powershell_toast(n)]);
+        }
+    }
+    command
+}
+
+/// Build a user-supplied command, without running it.
+///
+/// The event reaches it through the environment rather than through string
+/// interpolation: a device name or body containing a quote must not be able
+/// to change what runs.
+pub fn custom_command(shell_command: &str, n: &Notification) -> Command {
+    let mut command = if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", shell_command]);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.args(["-c", shell_command]);
+        c
+    };
+    command.env("D3HOME_EVENT", n.event);
+    command.env("D3HOME_DEVICE", &n.device);
+    command.env("D3HOME_TITLE", &n.title);
+    command.env("D3HOME_BODY", &n.body);
+    if let Some(temperature) = n.temperature {
+        command.env("D3HOME_TEMPERATURE", temperature.to_string());
+    }
+    if let Some(target) = n.target {
+        command.env("D3HOME_TARGET", target.to_string());
+    }
+    command
+}
+
+fn quote_applescript(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn powershell_toast(n: &Notification) -> String {
+    // The body goes through a PowerShell single-quoted string, where the
+    // only escape needed is a doubled quote.
+    let escape = |s: &str| s.replace('\'', "''");
+    format!(
+        "[reflection.assembly]::LoadWithPartialName('System.Windows.Forms') > $null; \
+         $b = New-Object System.Windows.Forms.NotifyIcon; \
+         $b.Icon = [System.Drawing.SystemIcons]::Information; \
+         $b.Visible = $true; \
+         $b.ShowBalloonTip(10000, '{}', '{}', 'Info')",
+        escape(&n.title),
+        escape(&n.body)
+    )
+}
+
+/// Delivers notifications, by whichever route was chosen once at startup.
+pub struct Notifier {
+    custom: Option<String>,
+    backend: Option<Backend>,
+}
+
+impl Notifier {
+    pub fn new(custom: Option<String>) -> Self {
+        let backend = if custom.is_some() {
+            None
+        } else {
+            detect_on_path()
+        };
+        Self { custom, backend }
+    }
+
+    /// What this will actually do, for the startup line. The choice should
+    /// never be a mystery to somebody wondering why nothing appeared.
+    pub fn describe(&self) -> String {
+        match (&self.custom, self.backend) {
+            (Some(command), _) => format!("a command: {command}"),
+            (None, Some(backend)) => backend.binary().to_string(),
+            (None, None) => "nothing -- no notifier found on PATH".to_string(),
+        }
+    }
+
+    /// Send one. Failure is reported and never fatal: missing a popup is not
+    /// a reason to stop watching a kettle.
+    ///
+    /// A zero exit means the command ran, not that anything appeared on a
+    /// screen -- the same distinction as the device's frame acknowledgement.
+    /// Nothing here claims delivery.
+    pub fn deliver(&self, n: &Notification) {
+        let mut command = match (&self.custom, self.backend) {
+            (Some(shell_command), _) => custom_command(shell_command, n),
+            (None, Some(backend)) => backend_command(backend, n),
+            (None, None) => return,
+        };
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        match command.spawn() {
+            Ok(mut child) => {
+                // Reaped so the daemon does not accumulate zombies over a
+                // long life; the exit status is not evidence of anything.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            Err(err) => eprintln!("d3home: could not run the notifier: {err}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample() -> Notification {
+        Notification {
+            event: "boiled",
+            device: "kettle".into(),
+            title: "Kettle".into(),
+            body: "boiled at 98 \u{b0}C".into(),
+            temperature: Some(98),
+            target: Some(100),
+        }
+    }
+
+    fn args_of(command: &std::process::Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn every_backend_gets_the_text_into_its_own_arguments() {
+        for backend in [
+            Backend::NotifySend,
+            Backend::KdialogPassive,
+            Backend::Zenity,
+            Backend::Osascript,
+            Backend::PowerShell,
+        ] {
+            let command = backend_command(backend, &sample());
+            let joined = args_of(&command).join(" ");
+            assert!(joined.contains("98"), "{backend:?} lost the body: {joined}");
+            assert_eq!(command.get_program(), backend.binary());
+        }
+    }
+
+    #[test]
+    fn a_custom_command_receives_the_event_in_its_environment() {
+        // Through the environment rather than interpolated into the string:
+        // a body containing a quote must not be able to change what runs.
+        let command = custom_command("ntfy publish kettle \"$D3HOME_BODY\"", &sample());
+        let env: std::collections::HashMap<String, String> = command
+            .get_envs()
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().into_owned(),
+                    v?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect();
+
+        assert_eq!(env.get("D3HOME_EVENT").map(String::as_str), Some("boiled"));
+        assert_eq!(env.get("D3HOME_DEVICE").map(String::as_str), Some("kettle"));
+        assert_eq!(
+            env.get("D3HOME_TEMPERATURE").map(String::as_str),
+            Some("98")
+        );
+        assert_eq!(env.get("D3HOME_TARGET").map(String::as_str), Some("100"));
+    }
+
+    #[test]
+    fn a_hostile_body_cannot_escape_into_the_command() {
+        let mut n = sample();
+        n.body = "\"; rm -rf ~; echo \"".into();
+        let command = custom_command("echo \"$D3HOME_BODY\"", &n);
+        let joined = args_of(&command).join(" ");
+        assert!(
+            !joined.contains("rm -rf"),
+            "the body reached the command line: {joined}"
+        );
+    }
+
+    #[test]
+    fn a_missing_optional_reading_is_simply_absent() {
+        let mut n = sample();
+        n.target = None;
+        let command = custom_command("true", &n);
+        let names: Vec<String> = command
+            .get_envs()
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !names.contains(&"D3HOME_TARGET".to_string()),
+            "an empty variable is worse than none"
+        );
+    }
+
+    #[test]
+    fn describe_names_what_will_actually_be_used() {
+        // The daemon prints this at startup so the choice is never a mystery.
+        assert!(
+            Notifier::new(Some("ntfy publish x".into()))
+                .describe()
+                .contains("ntfy")
+        );
+        assert!(!Notifier::new(None).describe().is_empty());
+    }
 
     fn only<'a>(available: &'a [&'a str]) -> impl Fn(&str) -> bool + 'a {
         move |name: &str| available.contains(&name)
