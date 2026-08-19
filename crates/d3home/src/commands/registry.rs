@@ -141,7 +141,8 @@ pub fn help_text() -> String {
     out.push_str("    --json              machine-readable output\n");
     out.push_str("    --device <name>     device to act on, instead of the first word\n");
     out.push_str("    --config <path>     device registry to use\n");
-    out.push_str("    -h, --help          this text\n\n");
+    out.push_str("    -h, --help          this text\n");
+    out.push_str("    -V, --version       print the version and exit\n\n");
     out.push_str("EXIT CODES:\n");
     out.push_str("    0 ok   1 internal   2 usage   3 not found\n");
     out.push_str("    4 wrong token   5 timeout   6 device error\n");

@@ -505,6 +505,21 @@ fn reconnected_json() -> serde_json::Value {
 
 /// List the configured devices and their aliases -- but never the token,
 /// even under `--json`.
+/// Human-readable MAC: stored flat, read with separators.
+///
+/// The MAC is the identifier worth showing, not a slice of the token. It is
+/// already broadcast over mDNS so it is in no sense secret, and it is what
+/// the router's admin page and the vendor's share link both display -- which
+/// makes it the thing that ties a line in this list to a physical object on
+/// a worktop. Printing part of a token would be a habit worth not forming.
+fn pretty_mac(mac: &str) -> String {
+    mac.as_bytes()
+        .chunks(2)
+        .map(|pair| String::from_utf8_lossy(pair).to_string())
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
 pub fn print_devices(config: &Config, json: bool) {
     if json {
         let list: Vec<_> = config
@@ -516,19 +531,47 @@ pub fn print_devices(config: &Config, json: bool) {
                     "aliases": d.aliases,
                     "driver": d.driver,
                     "model": d.model,
+                    "mac": d.mac,
+                    "endpoint": d.cached.as_ref().map(|c| format!("{}:{}", c.address, c.port)),
                 })
             })
             .collect();
         println!("{}", serde_json::Value::Array(list));
-    } else if config.devices.is_empty() {
-        println!("no devices configured");
-    } else {
-        for device in &config.devices {
-            if device.aliases.is_empty() {
-                println!("{}", device.name);
-            } else {
-                println!("{} ({})", device.name, device.aliases.join(", "));
-            }
+        return;
+    }
+
+    if config.devices.is_empty() {
+        println!("no devices configured -- run `d3home add` to register one");
+        return;
+    }
+
+    let style = Style::detect();
+    for (index, device) in config.devices.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        let mut heading = style.bold(&device.name);
+        if !device.aliases.is_empty() {
+            heading.push_str(&style.dim(&format!("  ({})", device.aliases.join(", "))));
+        }
+        println!("  {heading}");
+
+        let rows = [
+            ("model", device.model.clone().unwrap_or_else(|| "unknown".into())),
+            ("driver", device.driver.clone()),
+            ("mac", pretty_mac(&device.mac)),
+            (
+                "endpoint",
+                match &device.cached {
+                    Some(cached) => format!("{}:{}", cached.address, cached.port),
+                    // Not an error: it simply has not been found yet, and the
+                    // next command will look for it.
+                    None => "not yet discovered".into(),
+                },
+            ),
+        ];
+        for (label, value) in rows {
+            println!("  {}{}", style.dim(&format!("{label:<10}")), value);
         }
     }
 }
@@ -730,6 +773,16 @@ pub fn print_added(name: &str, json: bool) {
         println!("{}", json!({ "action": "add", "device": name }));
     } else {
         println!("added '{name}'");
+    }
+}
+
+/// The program and its version, in whichever shape was asked for.
+pub fn print_version(json: bool) {
+    let version = env!("CARGO_PKG_VERSION");
+    if json {
+        println!("{}", json!({ "name": "d3home", "version": version }));
+    } else {
+        println!("d3home {version}");
     }
 }
 

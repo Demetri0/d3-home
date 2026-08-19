@@ -1121,3 +1121,72 @@ fn add_confirms_itself_in_whichever_shape_was_asked_for() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn version_is_printed_in_both_shapes_and_beats_whatever_else_was_typed() {
+    // Someone asking which build this is has stopped wanting the command to
+    // run, exactly as with --help.
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--version"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("d3home "));
+
+    Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["kettle", "status", "-V"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("d3home "));
+
+    let out = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--json", "--version"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("json version");
+    assert_eq!(value["name"], "d3home");
+    assert!(value["version"].as_str().is_some_and(|v| !v.is_empty()));
+}
+
+#[test]
+fn devices_identifies_each_entry_without_showing_any_of_the_token() {
+    // The MAC is the identifier worth printing: already broadcast over mDNS,
+    // and the thing a router's admin page shows. A slice of the token would
+    // be a secret leaking one habit at a time.
+    let dir = std::env::temp_dir().join(format!("d3home-devlist-{}-{}", std::process::id(), line!()));
+    let path = dir.join("devices.toml");
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let token = "deadbeefdeadbeefdeadbeefdeadbeef";
+    std::fs::write(
+        &path,
+        format!(
+            "[[devices]]\nname = \"kettle\"\naliases = [\"k\"]\ndriver = \"syncleo\"\n\
+             model = \"PWK 1725CGLD\"\nmac = \"deadbeefdead\"\ntoken = \"{token}\"\n"
+        ),
+    )
+    .unwrap();
+
+    let out = Command::cargo_bin("d3home")
+        .unwrap()
+        .args(["--config", path.to_str().unwrap(), "devices"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let listing = String::from_utf8(out).unwrap();
+
+    for expected in ["kettle", "k", "PWK 1725CGLD", "syncleo", "de:ad:be:ef:de:ad"] {
+        assert!(listing.contains(expected), "{expected} missing from:\n{listing}");
+    }
+    assert!(!listing.contains(token), "the token appeared in the listing:\n{listing}");
+    assert!(!listing.contains(&token[..8]), "part of the token appeared:\n{listing}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}

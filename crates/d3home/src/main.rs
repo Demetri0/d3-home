@@ -46,6 +46,11 @@ fn run(argv: &[String]) -> Result<(), AppError> {
 
     // `--help` anywhere wins over whatever else was typed: someone who asks
     // for help has already stopped wanting the command to run.
+    if globals.version {
+        output::print_version(globals.json);
+        return Ok(());
+    }
+
     if globals.help || words.first().is_some_and(|w| w == "help") {
         registry::help();
         return Ok(());

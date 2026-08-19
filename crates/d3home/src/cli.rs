@@ -10,7 +10,8 @@
 //! Global flags (`--config`, `--json`, `--device`, `--help`) are stripped
 //! out by [`split_globals`] first, from *any* position on the command line,
 //! and [`parse`] then sees only the remaining words. They are handled here
-//! rather than by `clap` because the first word is a device name drawn from
+//! rather than by a declarative parser because the first word is a device
+//! name drawn from
 //! the user's config, which forces a dynamic subcommand -- and a dynamic
 //! subcommand swallows everything after it verbatim, which is exactly how
 //! a trailing `--json` came to be silently ignored.
@@ -81,6 +82,7 @@ pub struct Globals {
     pub json: bool,
     pub device: Option<String>,
     pub help: bool,
+    pub version: bool,
 }
 
 /// Pull the global options out of `argv`, wherever they appear, and return
@@ -123,6 +125,9 @@ pub fn split_globals(argv: &[String]) -> Result<(Globals, Vec<String>), UsageErr
             "--" => literal = true,
             "--json" => globals.json = true,
             "--help" | "-h" => globals.help = true,
+            // `-V` rather than `-v`: the short form is conventionally version,
+            // and `-v` is what people reach for expecting verbosity.
+            "--version" | "-V" => globals.version = true,
             "--config" => globals.config = Some(take_value("--config")?.into()),
             "--device" => globals.device = Some(take_value("--device")?),
             _ => words.push(arg.clone()),
@@ -382,6 +387,13 @@ mod tests {
         assert_eq!(rest, words(&["alias", "add", "--json", "kettle"]));
     }
 
+
+    #[test]
+    fn version_is_recognised_from_any_position() {
+        for argv in [words(&["--version"]), words(&["kettle", "-V"]), words(&["kettle", "status", "--version"])] {
+            assert!(split_globals(&argv).unwrap().0.version, "version lost in {argv:?}");
+        }
+    }
     #[test]
     fn help_is_recognised_from_any_position() {
         for argv in [words(&["--help"]), words(&["kettle", "-h"]), words(&["kettle", "status", "--help"])] {
