@@ -17,6 +17,9 @@ static ORIGINAL: AtomicPtr<libc::termios> = AtomicPtr::new(std::ptr::null_mut())
 /// Restore the terminal. Safe to call from a signal handler: one syscall,
 /// no allocation, no locks.
 extern "C" fn restore_and_die(signal: i32) {
+    // A scroll region left in force would leave the user's shell scrolling
+    // inside a box until they ran `reset`.
+    crate::screen::reset_region_raw();
     let saved = ORIGINAL.load(Ordering::SeqCst);
     if !saved.is_null() {
         unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, saved) };

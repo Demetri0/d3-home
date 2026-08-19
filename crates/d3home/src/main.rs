@@ -11,6 +11,7 @@ mod config;
 mod keys;
 mod output;
 mod progress;
+mod screen;
 mod style;
 
 use std::path::Path;

@@ -293,6 +293,9 @@ pub struct WatchView {
     /// know when one of them *changed*. Nothing is announced until there is
     /// something to compare against.
     announced: bool,
+    /// The row reserved at the top of the screen, when the terminal can
+    /// spare one. Without it the bar falls back to a line at the bottom.
+    top: crate::screen::TopBar,
     live: bool,
 }
 
@@ -307,6 +310,7 @@ impl WatchView {
             error: None,
             child_lock: None,
             announced: false,
+            top: crate::screen::TopBar::new(false),
             live: false,
         }
     }
@@ -320,6 +324,7 @@ impl WatchView {
     /// a blank terminal until the kettle happens to say something.
     pub fn start(&mut self) {
         if self.animated() {
+            self.top = crate::screen::TopBar::new(true);
             self.redraw();
         }
     }
@@ -336,6 +341,10 @@ impl WatchView {
 
     /// Draw the bar as the last thing on screen.
     fn redraw(&mut self) {
+        if self.top.is_active() {
+            self.top.draw(&self.status_line());
+            return;
+        }
         self.clear_live();
         print!("\r{}", self.status_line());
         let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -688,7 +697,8 @@ mod tests {
 
     fn view_at(current: u8, target: Option<u8>, heating: bool) -> WatchView {
         WatchView { style: Style::Rich, json: false, target, current: Some(current), heating,
-            error: None, child_lock: None, announced: true, live: false }
+            error: None, child_lock: None, announced: true,
+            top: crate::screen::TopBar::new(false), live: false }
     }
 
     #[test]
@@ -706,7 +716,8 @@ mod tests {
         // Something is parsing those, so they must not be collapsed.
         for (style, json) in [(Style::Plain, false), (Style::Rich, true), (Style::Plain, true)] {
             let view = WatchView { style, json, target: Some(60), current: Some(40), heating: true,
-                error: None, child_lock: None, announced: true, live: false };
+                error: None, child_lock: None, announced: true,
+            top: crate::screen::TopBar::new(false), live: false };
             assert!(!view.animated(), "style {style:?} json {json} should not animate");
         }
         assert!(view_at(40, Some(60), true).animated());
