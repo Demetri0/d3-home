@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # --all-features builds the kettle simulator too, so the device side of
+      # the protocol is linted and exercised rather than only compiled locally.
+      - name: Test
+        run: cargo test --workspace --all-features
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  msrv:
+    name: minimum supported Rust (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The manifests declare rust-version = "1.85". A declared minimum that
+      # nobody builds against is a guess, so build against it.
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --all-features

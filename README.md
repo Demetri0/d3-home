@@ -466,7 +466,8 @@ Issues and patches are welcome, particularly:
   [`docs/protocol.md`](docs/protocol.md) for what has been ruled out already.
 
 `cargo test --workspace` and `cargo clippy --all-targets --workspace -- -D warnings`
-should both be clean. New behaviour comes with a test; the simulator in
+should both be clean — CI runs exactly those, plus a build against the declared
+minimum Rust. New behaviour comes with a test; the simulator in
 `crates/syncleo/src/simulator.rs` means you do not need a kettle to write one.
 
 ## Credit
