@@ -124,7 +124,9 @@ pub fn help_text() -> String {
     out.push_str("                        a heat already running\n");
     out.push_str("    off, stop           stop heating\n");
     out.push_str("    watch               stream events until q or Ctrl-C; reconnects\n");
-    out.push_str("                        by itself when the kettle is put back\n\n");
+    out.push_str("                        by itself when the kettle is put back\n");
+    out.push_str("    trace               every report the device makes, with protocol\n");
+    out.push_str("                        codes -- for taking the protocol apart\n\n");
     out.push_str("BUILTINS:\n");
     out.push_str("    add [link]          register a device: paste the share link from\n");
     out.push_str("                        the vendor app, or answer prompts, or pass\n");

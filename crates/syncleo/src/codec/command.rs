@@ -86,6 +86,30 @@ pub enum Event {
 }
 
 impl Event {
+    /// The protocol command code this event arrived as.
+    ///
+    /// Kept alongside the decoded meaning so a trace can show both: the
+    /// number is what you match against a packet capture or the reference
+    /// implementation, and it is the only handle on the codes nobody has
+    /// identified yet.
+    pub fn code(&self) -> u8 {
+        match self {
+            Self::HandshakeResponse { .. } => ty::HANDSHAKE,
+            Self::Mode(_) => ty::MODE,
+            Self::TargetTemperature(_) => ty::TARGET_TEMPERATURE,
+            Self::Error(_) => ty::ERROR,
+            Self::Volume(_) => ty::VOLUME,
+            Self::CurrentTemperature(_) => ty::CURRENT_TEMPERATURE,
+            Self::Backlight(_) => ty::BACKLIGHT,
+            Self::ChildLock(_) => ty::CHILD_LOCK,
+            Self::AccessControl(_) => ty::ACCESS_CONTROL,
+            Self::Hardware(_) => ty::HARDWARE,
+            Self::Diagnostic(_) => ty::DIAGNOSTIC,
+            Self::Ping => ty::PING,
+            Self::Unknown { ty, .. } => *ty,
+        }
+    }
+
     /// Decode a frame body (`[command_type, data...]`) into an [`Event`].
     ///
     /// An empty body is the one thing this refuses outright: there is no

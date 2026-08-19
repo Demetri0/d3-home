@@ -5,6 +5,7 @@
 
 mod bar;
 mod cli;
+mod clock;
 mod commands;
 mod config;
 mod keys;

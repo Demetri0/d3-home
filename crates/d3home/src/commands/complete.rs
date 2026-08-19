@@ -14,7 +14,7 @@ use crate::config::{Config, RESERVED};
 /// its completions follow, with no change to the shell scripts.
 fn actions_for(driver: &str) -> &'static [&'static str] {
     match driver {
-        "syncleo" => &["status", "start", "on", "set", "off", "stop", "watch"],
+        "syncleo" => &["status", "start", "on", "set", "off", "stop", "watch", "trace"],
         _ => &[],
     }
 }

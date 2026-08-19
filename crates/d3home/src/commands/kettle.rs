@@ -69,7 +69,7 @@ const WATCH_RECONNECT_BACKOFF_CEILING: Duration = Duration::from_secs(5);
 pub fn run(device: &Device, action: &[String], json: bool, config_path: &Path) -> Result<(), AppError> {
     let (verb, rest) = action
         .split_first()
-        .ok_or_else(|| AppError::Usage("missing action; try status, start, set, off, or watch".into()))?;
+        .ok_or_else(|| AppError::Usage("missing action; try status, start, set, off, watch, or trace".into()))?;
 
     // No kettle action takes an option of its own, so anything option-shaped
     // that survived global parsing is a typo -- and a typo silently read as
@@ -86,8 +86,9 @@ pub fn run(device: &Device, action: &[String], json: bool, config_path: &Path) -
         "set" => set(device, rest, json, config_path),
         "off" | "stop" => off(device, json, config_path),
         "watch" => watch(device, json, config_path),
+        "trace" => trace(device, json, config_path),
         other => Err(AppError::Usage(format!(
-            "unknown kettle action '{other}'; try status, start (on), set, off (stop), or watch"
+            "unknown kettle action '{other}'; try status, start (on), set, off (stop), watch, or trace"
         ))),
     }
 }
@@ -272,6 +273,17 @@ fn off(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> 
 /// this treats that exactly like the callback asking to stop -- quietly,
 /// exit 0, since nobody is left to see either an error or an event.
 fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
+    stream(device, config_path, &mut output::WatchView::new(json))
+}
+
+/// The raw event log, for taking the protocol apart.
+fn trace(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError> {
+    stream(device, config_path, &mut output::TraceView::new(json))
+}
+
+/// Hold a session open and feed everything it reports to `sink`, reconnecting
+/// for as long as the failures are ones that reconnecting can fix.
+fn stream(device: &Device, config_path: &Path, sink: &mut dyn output::EventSink) -> Result<(), AppError> {
     // Owned, not borrowed: see the loop below -- every reconnect updates
     // this with whatever endpoint actually worked, so the *next* reconnect
     // tries that one first instead of the address `watch` started with.
@@ -280,19 +292,18 @@ fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError
     // Restores the terminal on every exit path, including a signal.
     let keys = crate::keys::QuitOnKey::start();
     let quit = keys.quit();
-    let mut view = output::WatchView::new(json);
-    view.start();
+    sink.start();
     device.cached = Some(cached);
 
     loop {
         let result = client.watch(
-            |event| match view.event(&event) {
+            |event| match sink.event(&event) {
                 Ok(()) => ControlFlow::Continue(()),
                 Err(_) => ControlFlow::Break(()),
             },
             || !quit.requested(),
         );
-        view.finish();
+        sink.finish();
         if quit.requested() {
             return Ok(());
         }
@@ -331,7 +342,7 @@ fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError
         // what it is. If even this can't be written, the reader is
         // already gone -- stop now rather than reconnect once more only
         // to find the very first event fails the same way.
-        if output::print_watch_reconnected(json).is_err() {
+        if sink.reconnected().is_err() {
             return Ok(());
         }
     }

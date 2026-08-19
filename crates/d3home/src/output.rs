@@ -287,6 +287,12 @@ pub struct WatchView {
     /// while switched off, so a bar drawn from the target alone would
     /// promise a heat that is not happening.
     heating: bool,
+    error: Option<bool>,
+    child_lock: Option<bool>,
+    /// The device reports the same values over and over; a person wants to
+    /// know when one of them *changed*. Nothing is announced until there is
+    /// something to compare against.
+    announced: bool,
     live: bool,
 }
 
@@ -298,6 +304,9 @@ impl WatchView {
             target: None,
             current: None,
             heating: false,
+            error: None,
+            child_lock: None,
+            announced: false,
             live: false,
         }
     }
@@ -334,26 +343,98 @@ impl WatchView {
     }
 
     pub fn event(&mut self, event: &Event) -> std::io::Result<()> {
-        match event {
-            Event::TargetTemperature(t) => self.target = Some(*t),
-            Event::CurrentTemperature(t) => self.current = Some(*t),
-            Event::Mode(mode) => self.heating = *mode != PowerMode::Off,
-            _ => {}
+        // `--json` is the machine stream, and it is the same for `watch` and
+        // `trace`: everything, unfiltered. The filtering below is only about
+        // what a person wants to read.
+        if self.json {
+            return print_event(event, true);
         }
 
-        if !self.animated() {
-            return print_event(event, self.json);
-        }
-
-        // Temperature arrives once per degree; on a terminal those belong in
-        // the bar, not as sixty near-identical lines. Everything else is news
-        // and gets a line of its own, printed above the bar.
-        if !matches!(event, Event::CurrentTemperature(_)) {
+        if let Some(note) = self.absorb(event) {
             self.clear_live();
-            print_event(event, self.json)?;
+            write_line(&format!("{}  {note}", self.style.dim(&crate::clock::hms())))?;
         }
-        self.redraw();
+        if self.animated() {
+            self.redraw();
+        }
         Ok(())
+    }
+
+    /// Fold the event into what we know, and say what a person should be
+    /// told about it, if anything.
+    fn absorb(&mut self, event: &Event) -> Option<String> {
+        match event {
+            Event::CurrentTemperature(t) => {
+                let first = self.current.is_none();
+                self.current = Some(*t);
+                // The reading itself lives in the bar; only the first one is
+                // worth a line, as "here is what you attached to".
+                if first && !self.announced {
+                    self.announced = true;
+                    return Some(self.connected_note());
+                }
+                None
+            }
+            Event::TargetTemperature(t) => {
+                let previous = self.target.replace(*t);
+                match previous {
+                    Some(old) if old != *t && self.heating => {
+                        Some(format!("target changed to {t} \u{00b0}C"))
+                    }
+                    _ => None,
+                }
+            }
+            Event::Mode(mode) => {
+                let was = self.heating;
+                self.heating = *mode != PowerMode::Off;
+                if !self.announced || was == self.heating {
+                    return None;
+                }
+                Some(if self.heating {
+                    match self.target {
+                        Some(target) => format!("heating to {target} \u{00b0}C"),
+                        None => "heating".to_string(),
+                    }
+                } else {
+                    match (self.current, self.target) {
+                        // Within a couple of degrees of the target is the
+                        // kettle finishing, not somebody stopping it.
+                        (Some(current), Some(target)) if current + 2 >= target => {
+                            format!("reached {current} \u{00b0}C, switched off")
+                        }
+                        (Some(current), _) => format!("switched off at {current} \u{00b0}C"),
+                        _ => "switched off".to_string(),
+                    }
+                })
+            }
+            Event::Error(flag) => match self.error.replace(*flag) {
+                Some(was) if was != *flag => Some(if *flag {
+                    self.style.red("the kettle reports an error")
+                } else {
+                    "error cleared".to_string()
+                }),
+                _ => None,
+            },
+            Event::ChildLock(flag) => match self.child_lock.replace(*flag) {
+                Some(was) if was != *flag => {
+                    Some(format!("child lock {}", if *flag { "on" } else { "off" }))
+                }
+                _ => None,
+            },
+            // Diagnostics, hardware, access control, volume, the unidentified
+            // codes: real data, none of it something a person watching a
+            // kettle asked to see. `trace` is where all of it goes.
+            _ => None,
+        }
+    }
+
+    fn connected_note(&self) -> String {
+        let current = self.current.map_or_else(|| "unknown".into(), |t| format!("{t} \u{00b0}C"));
+        match (self.heating, self.target) {
+            (true, Some(target)) => format!("connected \u{2014} {current}, heating to {target} \u{00b0}C"),
+            (true, None) => format!("connected \u{2014} {current}, heating"),
+            (false, _) => format!("connected \u{2014} {current}, idle"),
+        }
     }
 
     /// Called when the stream ends, so the bar is not left dangling without
@@ -501,6 +582,85 @@ pub fn print_stopped(json: bool) {
     }
 }
 
+/// The raw event log: every report the device makes, in the order it makes
+/// them, with the protocol code beside the decoded meaning.
+///
+/// This is the view for taking the protocol apart rather than for watching a
+/// kettle. It is where the two command codes nobody has identified show
+/// their bytes, and where the ordering inside the post-handshake burst is
+/// visible at all.
+pub struct TraceView {
+    style: Style,
+    json: bool,
+}
+
+impl TraceView {
+    pub fn new(json: bool) -> Self {
+        Self { style: Style::detect(), json }
+    }
+
+    pub fn event(&mut self, event: &Event) -> std::io::Result<()> {
+        if self.json {
+            return print_event(event, true);
+        }
+        write_line(&format!(
+            "{}  {}  {}",
+            self.style.dim(&crate::clock::hms_millis()),
+            self.style.yellow(&format!("{:>3}", event.code())),
+            event_human(event),
+        ))
+    }
+
+    /// A session boundary matters in a trace: the whole burst is about to
+    /// repeat, and unmarked it reads as duplicated data.
+    pub fn reconnected(&mut self) -> std::io::Result<()> {
+        if self.json {
+            return print_watch_reconnected(true);
+        }
+        write_line(&self.style.dim("--- reconnected ---"))
+    }
+}
+
+/// What a streaming command does with the events it receives.
+///
+/// `watch` and `trace` listen to exactly the same stream and differ only in
+/// what they make of it, so the loop that owns the connection is written
+/// once and told which of these to feed.
+pub trait EventSink {
+    /// Called before the first event, for a view that wants something on
+    /// screen straight away.
+    fn start(&mut self) {}
+    fn event(&mut self, event: &Event) -> std::io::Result<()>;
+    fn reconnected(&mut self) -> std::io::Result<()>;
+    /// Called when the stream ends, to tidy anything left mid-line.
+    fn finish(&mut self) {}
+}
+
+impl EventSink for WatchView {
+    fn start(&mut self) {
+        WatchView::start(self);
+    }
+    fn event(&mut self, event: &Event) -> std::io::Result<()> {
+        WatchView::event(self, event)
+    }
+    fn reconnected(&mut self) -> std::io::Result<()> {
+        self.clear_live();
+        print_watch_reconnected(self.json)
+    }
+    fn finish(&mut self) {
+        WatchView::finish(self);
+    }
+}
+
+impl EventSink for TraceView {
+    fn event(&mut self, event: &Event) -> std::io::Result<()> {
+        TraceView::event(self, event)
+    }
+    fn reconnected(&mut self) -> std::io::Result<()> {
+        TraceView::reconnected(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,7 +687,8 @@ mod tests {
     }
 
     fn view_at(current: u8, target: Option<u8>, heating: bool) -> WatchView {
-        WatchView { style: Style::Rich, json: false, target, current: Some(current), heating, live: false }
+        WatchView { style: Style::Rich, json: false, target, current: Some(current), heating,
+            error: None, child_lock: None, announced: true, live: false }
     }
 
     #[test]
@@ -544,7 +705,8 @@ mod tests {
     fn json_and_plain_streams_keep_one_line_per_reading() {
         // Something is parsing those, so they must not be collapsed.
         for (style, json) in [(Style::Plain, false), (Style::Rich, true), (Style::Plain, true)] {
-            let view = WatchView { style, json, target: Some(60), current: Some(40), heating: true, live: false };
+            let view = WatchView { style, json, target: Some(60), current: Some(40), heating: true,
+                error: None, child_lock: None, announced: true, live: false };
             assert!(!view.animated(), "style {style:?} json {json} should not animate");
         }
         assert!(view_at(40, Some(60), true).animated());

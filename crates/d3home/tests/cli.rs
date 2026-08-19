@@ -306,6 +306,10 @@ fn collect_burst_lines(
 /// during the post-handshake burst. Kills the child and shuts the simulator
 /// down before returning.
 fn watch_burst_lines(handle: &syncleo::simulator::KettleHandle, json_flag: &[&str]) -> Vec<String> {
+    burst_lines(handle, json_flag, "watch")
+}
+
+fn burst_lines(handle: &syncleo::simulator::KettleHandle, json_flag: &[&str], action: &str) -> Vec<String> {
     use assert_cmd::prelude::*;
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
@@ -317,7 +321,7 @@ fn watch_burst_lines(handle: &syncleo::simulator::KettleHandle, json_flag: &[&st
 
     let mut args: Vec<&str> = vec!["--config", &config_str];
     args.extend_from_slice(json_flag);
-    args.extend_from_slice(&["kettle", "watch"]);
+    args.extend_from_slice(&["kettle", action]);
 
     let mut child = std::process::Command::cargo_bin("d3home")
         .unwrap()
@@ -346,25 +350,41 @@ fn watch_burst_lines(handle: &syncleo::simulator::KettleHandle, json_flag: &[&st
 }
 
 #[test]
-fn human_watch_output_shows_the_diagnostic_decoded() {
-    // The simulator's burst includes a diagnostic event (code 145, mirroring
-    // what the real device sends unprompted right after the handshake) shaped
-    // exactly like a real capture: a 20-byte header then tag/value pairs
-    // `udps=1 IDLE=2 Tmr=3 rtT=4` (see `report_state_burst`). The human
-    // `watch` view must show it decoded, not hide it and not dump raw bytes.
+fn trace_shows_every_report_with_its_protocol_code() {
+    // `trace` is the view for taking the protocol apart: the diagnostic
+    // (code 145) arrives shaped like a real capture -- a 20-byte header then
+    // tag/value pairs -- and must be shown decoded, beside its code, along
+    // with everything else the device says.
     let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
-    let lines = watch_burst_lines(&handle, &[]);
+    let lines = burst_lines(&handle, &[], "trace");
     handle.shutdown();
 
-    assert!(!lines.is_empty(), "watch printed no lines at all");
+    assert!(!lines.is_empty(), "trace printed no lines at all");
     let joined = lines.join("\n");
     assert!(
         joined.contains("diagnostic: udps=1 IDLE=2 Tmr=3 rtT=4"),
         "expected the decoded diagnostic line, got: {joined}"
     );
+    assert!(joined.contains("hardware: 1.1.4"), "expected hardware as 1.1.4, got: {joined}");
+    assert!(joined.contains("145"), "the protocol code is the point of trace: {joined}");
+}
+
+#[test]
+fn human_watch_keeps_the_protocol_chatter_out_of_the_way() {
+    // The device repeats the same reports endlessly; a person watching a
+    // kettle wants the moments something changed, not the raw stream. All of
+    // that detail is still available -- in `trace`.
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let lines = burst_lines(&handle, &[], "watch");
+    handle.shutdown();
+
+    let joined = lines.join("\n");
+    assert!(!joined.contains("diagnostic"), "diagnostics belong in trace: {joined}");
+    assert!(!joined.contains("access control"), "access control belongs in trace: {joined}");
+    assert!(!joined.contains("hardware"), "hardware belongs in trace: {joined}");
     assert!(
-        joined.contains("hardware: 1.1.4"),
-        "expected the hardware version rendered as 1.1.4, got: {joined}"
+        joined.contains("connected"),
+        "watch should say what it attached to, got: {joined}"
     );
 }
 
