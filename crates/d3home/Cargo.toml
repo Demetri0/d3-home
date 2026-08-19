@@ -2,7 +2,7 @@
 name = "d3home"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Command line for smart home devices on the local network, starting with a Polaris kettle"
 license = "MIT OR Apache-2.0"
 keywords = ["cli", "polaris", "kettle", "smart-home", "iot"]

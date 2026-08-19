@@ -42,7 +42,7 @@ Working and in daily use, but young, and honest about its limits:
 
 ## Installing
 
-Rust 1.85 or newer (the crates use edition 2024).
+Rust 1.88 or newer.
 
 ```
 git clone https://github.com/Demetri0/d3-home

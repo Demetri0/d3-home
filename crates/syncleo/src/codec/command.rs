@@ -227,9 +227,7 @@ pub fn decode_diagnostic(payload: &[u8]) -> Option<Vec<(String, u32)>> {
         return None;
     }
     let pairs = &payload[HEADER_LEN..];
-    // `%` rather than `is_multiple_of`, which is only stable since 1.87
-    // and would raise this crate's minimum Rust for no gain.
-    if pairs.len() % PAIR_LEN != 0 {
+    if !pairs.len().is_multiple_of(PAIR_LEN) {
         return None;
     }
 
