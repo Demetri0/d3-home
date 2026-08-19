@@ -18,7 +18,7 @@ jobs:
     name: test and lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -40,7 +40,7 @@ jobs:
     name: minimum supported Rust (1.88)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # The manifests declare rust-version = "1.88". A declared minimum that
       # nobody builds against is a guess, so build against it.
       - uses: dtolnay/rust-toolchain@1.88.0
