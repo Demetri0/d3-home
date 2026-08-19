@@ -462,8 +462,12 @@ impl WatchView {
                 } else {
                     match (self.current, self.target) {
                         // Within a couple of degrees of the target is the
-                        // kettle finishing, not somebody stopping it.
-                        (Some(current), Some(target)) if current + 2 >= target => {
+                        // kettle finishing, not somebody stopping it. The
+                        // same tolerance decides `boiled` in
+                        // `commands::daemon`, and the two must agree.
+                        // Saturating, because a device reporting 255 would
+                        // otherwise overflow the addition.
+                        (Some(current), Some(target)) if current.saturating_add(2) >= target => {
                             format!("reached {current} \u{00b0}C, switched off")
                         }
                         (Some(current), _) => format!("switched off at {current} \u{00b0}C"),
