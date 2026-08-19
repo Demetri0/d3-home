@@ -93,8 +93,31 @@ struct Shared {
     /// a fresh handshake attempt -- is silently dropped, exactly as if the
     /// device had no power at all. See `KettleHandle::vanish_for`.
     silent_until: Mutex<Option<Instant>>,
+    /// A heat in progress, left here by `KettleHandle::boil_to` for the run
+    /// loop to perform. See [`Climb`].
+    climb: Mutex<Option<Climb>>,
     stop: AtomicBool,
 }
+
+/// A heat in progress: the device climbing towards a target and switching
+/// itself off on arrival.
+///
+/// The handle cannot send anything itself -- the socket and the peer it is
+/// talking to live on the run loop's stack, so that one thread owns the wire
+/// -- so a heat is left here as an intention and performed by the loop, the
+/// same way `delay_state_burst` leaves a burst to be sent later.
+struct Climb {
+    target: u8,
+    step: Duration,
+    next_due: Instant,
+    /// Whether the target and the switch to heating have been reported yet.
+    announced: bool,
+}
+
+/// How long a simulated degree takes. Fast enough that a test does not wait
+/// on a kettle, slow enough that the climb arrives as a stream of separate
+/// reports rather than one indistinguishable burst.
+const CLIMB_STEP: Duration = Duration::from_millis(20);
 
 /// A running simulator: an address to point a
 /// [`crate::transport::UdpTransport`] at, and the public key the client
@@ -115,6 +138,23 @@ impl KettleHandle {
             .state
             .lock()
             .expect("simulator state lock poisoned")
+    }
+
+    /// Drive a heat: switch to heating, climb to `target` a degree at a
+    /// time as the real device does, then switch off on arrival.
+    ///
+    /// Returns immediately. The heat is carried out by the simulator's own
+    /// thread, the only one holding the socket, and every degree is reported
+    /// the way the device reports it -- so a client sees the same stream it
+    /// would see from a kettle on a worktop, including the unbidden
+    /// `mode: off` that ends it.
+    pub fn boil_to(&self, target: u8) {
+        *self.shared.climb.lock().expect("climb lock poisoned") = Some(Climb {
+            target,
+            step: CLIMB_STEP,
+            next_due: Instant::now(),
+            announced: false,
+        });
     }
 
     /// From now on, silently drop every `Cmd` frame from an established
@@ -251,6 +291,7 @@ impl KettleSimulator {
             valid_acks: AtomicUsize::new(0),
             burst_delay_ms: AtomicU64::new(0),
             silent_until: Mutex::new(None),
+            climb: Mutex::new(None),
             stop: AtomicBool::new(false),
         });
 
@@ -301,6 +342,14 @@ fn run(socket: UdpSocket, token: [u8; 16], shared: &Shared, send_state_burst: bo
         {
             report_state_burst(&socket, burst.to, &burst.keys, shared);
             pending_burst = None;
+        }
+
+        // Likewise checked once per iteration: a heat left by `boil_to` is
+        // performed here, on the thread that owns the socket.
+        if let Some(p) = &peer
+            && !is_silent(shared)
+        {
+            advance_climb(&socket, p, shared);
         }
 
         let (n, from) = match socket.recv_from(&mut buf) {
@@ -455,6 +504,72 @@ fn handle_handshake(
 /// (see the design spec's code-145 row). Both are fixed, not part of
 /// `SimulatedState`: nothing in this project reads or acts on either, so
 /// there is nothing for a test to configure.
+/// Move a heat along, if one is due. Called once per run-loop iteration, so
+/// the poll interval bounds how late a degree can be; several degrees may
+/// fall due within a single iteration, and all of them are reported.
+fn advance_climb(socket: &UdpSocket, peer: &Peer, shared: &Shared) {
+    let mut guard = shared.climb.lock().expect("climb lock poisoned");
+    // Taken out for the duration: putting it back is what keeps the heat
+    // going, and the arrival below simply does not.
+    let Some(mut climb) = guard.take() else {
+        return;
+    };
+
+    if !climb.announced {
+        climb.announced = true;
+        {
+            let mut state = shared.state.lock().expect("state lock poisoned");
+            state.target = climb.target;
+            state.mode = PowerMode::Custom;
+        }
+        report(
+            socket,
+            peer,
+            shared,
+            vec![ty::TARGET_TEMPERATURE, climb.target, 0],
+        );
+        report(
+            socket,
+            peer,
+            shared,
+            vec![ty::MODE, PowerMode::Custom.as_u8()],
+        );
+    }
+
+    while Instant::now() >= climb.next_due {
+        climb.next_due += climb.step;
+        let current = {
+            let mut state = shared.state.lock().expect("state lock poisoned");
+            if state.current < climb.target {
+                state.current += 1;
+            }
+            state.current
+        };
+        report(
+            socket,
+            peer,
+            shared,
+            vec![ty::CURRENT_TEMPERATURE, current, 0],
+        );
+
+        if current >= climb.target {
+            shared.state.lock().expect("state lock poisoned").mode = PowerMode::Off;
+            report(socket, peer, shared, vec![ty::MODE, PowerMode::Off.as_u8()]);
+            return;
+        }
+    }
+
+    *guard = Some(climb);
+}
+
+/// Send one unbidden report to the peer, as the device does when its state
+/// changes of its own accord.
+fn report(socket: &UdpSocket, peer: &Peer, shared: &Shared, body: Vec<u8>) {
+    let seq = next_seq(shared);
+    let frame = encrypt_frame(&peer.keys, seq, FrameType::Cmd, &body).to_bytes();
+    let _ = socket.send_to(&frame, peer.addr);
+}
+
 fn report_state_burst(socket: &UdpSocket, to: SocketAddr, keys: &SessionKeys, shared: &Shared) {
     let snapshot = *shared.state.lock().expect("state lock poisoned");
 

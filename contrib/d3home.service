@@ -1,0 +1,20 @@
+# A systemd *user* unit, not a system one: a notification has to reach a
+# logged-in desktop, and a system service has no way to get to it.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/d3home.service ~/.config/systemd/user/
+#   systemctl --user enable --now d3home
+#   journalctl --user -u d3home -f
+
+[Unit]
+Description=d3home device watcher
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/d3home daemon
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

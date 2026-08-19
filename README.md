@@ -161,6 +161,7 @@ d3home kettle off             # stop (synonym: stop)
 d3home kettle watch           # what is happening, until q or Ctrl-C; reconnects itself
 d3home kettle trace           # the whole event stream with protocol codes
 
+d3home daemon                 # watch everything and notify; see "The daemon"
 d3home add                    # register a device
 d3home completions fish       # print a completion script
 d3home discover               # what is visible on the network
@@ -375,6 +376,115 @@ admin page and the vendor's share link both display — which is what ties a lin
 this list to an object on a worktop. Printing part of a secret is a habit worth
 not forming.
 
+## The daemon
+
+`d3home daemon` watches the configured devices and tells you when something
+happens — most usefully that the kettle has boiled, so you can walk away from
+it. It runs in the foreground and does not fork, so whatever starts it decides
+when it stops: systemd, launchd, Task Scheduler, or a terminal you leave open.
+
+```
+$ d3home daemon
+d3home: watching kettle via notify-send
+```
+
+It says which notifier it chose at startup, because the alternative is
+wondering later why nothing appeared.
+
+### Settings
+
+Every part is optional. A config with no `[daemon]` section watches every
+device and reports the two events worth interrupting somebody for.
+
+```toml
+[daemon]
+devices = ["kettle"]      # omit to watch everything configured
+
+[daemon.notify]
+on = ["boiled", "error"]  # the default
+# command = "ntfy publish my-topic \"$D3HOME_BODY\""
+```
+
+| Event | When |
+| --- | --- |
+| `boiled` | heating ended within two degrees of the target |
+| `stopped` | heating ended short of it — somebody switched it off |
+| `started` | heating began, including from the vendor's app |
+| `error` | the device began reporting an error |
+| `offline` | the connection was lost — the kettle lifted off its base |
+| `online` | it came back |
+
+`offline` and `online` are off by default: a kettle leaves its base many times
+a day, and notifications for it would be noise.
+
+A misspelt event name is refused when the config loads, with the list of real
+ones. Accepting it would mean waiting all evening for a notification that was
+never going to come.
+
+### How a notification is delivered
+
+No notification library is linked. d3home looks for a command that already
+exists on the system and uses the first one it finds:
+
+| Order | Command | Where it comes from |
+| --- | --- | --- |
+| 1 | `notify-send` | freedesktop — GNOME, KDE, dunst, mako, swaync all answer it |
+| 2 | `kdialog` | KDE |
+| 3 | `zenity` | GTK |
+| 4 | `osascript` | macOS, always present |
+| 5 | `powershell.exe` | Windows, always present |
+
+The choice is made by **whether the binary exists**, never by sending a test
+notification and seeing what happens — nobody should have to dismiss five
+popups because a program was working out how to talk to them. If none is
+found, d3home says so at startup and carries on watching; a missing popup is
+not a reason to stop.
+
+`command` overrides all of it, for a phone, a chat room, or a light bulb. The
+event reaches it through the environment rather than through the command
+string, so a device name or a body containing a quote cannot change what runs:
+
+| Variable | Example |
+| --- | --- |
+| `D3HOME_EVENT` | `boiled` |
+| `D3HOME_DEVICE` | `kettle` |
+| `D3HOME_TITLE` | `kettle` |
+| `D3HOME_BODY` | `boiled at 98 °C` |
+| `D3HOME_TEMPERATURE` | `98` |
+| `D3HOME_TARGET` | `100` |
+
+A reading the device did not send is absent rather than empty.
+
+### Keeping it running
+
+Three examples in [`contrib/`](contrib/), all of which run d3home **in the
+logged-in user's session**, because that is the only place a notification can
+appear.
+
+```bash
+# Linux, systemd user unit
+mkdir -p ~/.config/systemd/user
+cp contrib/d3home.service ~/.config/systemd/user/
+systemctl --user enable --now d3home
+journalctl --user -u d3home -f
+
+# macOS, LaunchAgent
+cp contrib/com.d3home.daemon.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.d3home.daemon.plist
+
+# Windows, scheduled task
+schtasks /Create /XML contrib\d3home-task.xml /TN d3home
+```
+
+Windows gets a scheduled task rather than a service, and this is not a
+compromise: since Vista, services run in session 0 and are barred from the
+user's desktop, so a service could not show a notification at all.
+
+The daemon writes diagnostics to stderr and nothing else — no log file, no
+rotation, no configuration for either. Whatever starts it already collects
+stderr and already knows how to rotate it, and `journalctl --user -u d3home`
+does a better job than a second implementation would.
+
 ## Exit codes
 
 | Code | What happened |
@@ -447,10 +557,8 @@ disagrees with the reference implementation.
 
 ## Not done yet
 
-- A background daemon and "it boiled" notifications. The session layer already
-  hands events outward as a stream and `watch` merely prints them, so a notifier
-  needs the same stream and a long-lived process — the protocol does not stand in
-  the way.
+- Event history and statistics. The daemon recognises the moments; nothing
+  writes them down yet.
 - Roborock vacuums and Alice BT remotes. The driver and the CLI are separated for
   exactly this.
 - Working from outside the home network.

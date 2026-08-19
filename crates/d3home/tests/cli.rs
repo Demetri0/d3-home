@@ -1466,3 +1466,79 @@ fn help_and_completion_both_know_about_the_daemon() {
         .success()
         .stdout(predicate::str::contains("daemon"));
 }
+
+#[test]
+fn the_daemon_notifies_once_when_the_simulated_kettle_boils() {
+    // The custom-command route is the only one testable without a desktop:
+    // it writes a file, which the test then reads. The built-in notifiers
+    // are covered by unit tests that build their commands without running
+    // them.
+    use std::os::unix::fs::PermissionsExt;
+
+    let handle = syncleo::simulator::KettleSimulator::spawn(TOKEN).unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "d3home-daemon-e2e-{}-{}",
+        std::process::id(),
+        handle.addr.port()
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("devices.toml");
+    let witness = dir.join("fired");
+
+    std::fs::write(
+        &path,
+        format!(
+            "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"deadbeefdead\"\n\
+             token = \"{}\"\n\n[devices.cached]\naddress = \"{}\"\nport = {}\npublic_key = \"{}\"\n\n\
+             [daemon.notify]\non = [\"boiled\"]\ncommand = \"echo $D3HOME_EVENT:$D3HOME_TEMPERATURE >> {}\"\n",
+            hex(&TOKEN),
+            handle.addr.ip(),
+            handle.addr.port(),
+            hex(&handle.public_wire),
+            witness.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("d3home"))
+        .args(["--config", path.to_str().unwrap(), "daemon"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Let it connect, then drive the simulated kettle through a boil.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    handle.boil_to(80);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline && !witness.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    // A moment more, so a second notification would have time to arrive and
+    // be caught by the count below rather than missed by a race.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    child.kill().ok();
+    let _ = child.wait();
+    handle.shutdown();
+
+    let fired = std::fs::read_to_string(&witness).unwrap_or_default();
+    // The reading as well as the name: the command is handed both through
+    // the environment, and a notification that arrived without its
+    // temperature would be a chain that only half works.
+    assert_eq!(
+        fired.trim(),
+        "boiled:80",
+        "no notification fired, or it arrived without its reading"
+    );
+    assert_eq!(
+        fired.lines().count(),
+        1,
+        "exactly one boil, one notification: {fired:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
