@@ -155,7 +155,7 @@ mod tests {
     use std::net::Ipv4Addr;
 
     fn sample_kettle_toml() -> String {
-        "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n".into()
+        "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"deadbeefdead\"\ntoken = \"deadbeefdeadbeefdeadbeefdeadbeef\"\n".into()
     }
 
     fn found(mac: &str) -> Found {
@@ -178,7 +178,7 @@ mod tests {
         let path = dir.join("devices.toml");
         std::fs::write(&path, sample_kettle_toml()).unwrap();
 
-        cache_discovered(&path, &[found("aabbccddeeff")]).unwrap();
+        cache_discovered(&path, &[found("deadbeefdead")]).unwrap();
 
         let reloaded = Config::load(&path).unwrap();
         let cached = reloaded.resolve("kettle").unwrap().cached.as_ref().expect("cache was written");
@@ -196,7 +196,7 @@ mod tests {
         let path = dir.join("devices.toml");
         std::fs::write(&path, sample_kettle_toml()).unwrap();
 
-        let mut link_local = found("aabbccddeeff");
+        let mut link_local = found("deadbeefdead");
         link_local.address = "fe80::dead:beef:dead:beef".parse().unwrap();
         link_local.interface = Some("enp8s0".into());
         cache_discovered(&path, &[link_local]).unwrap();
@@ -218,7 +218,7 @@ mod tests {
 
         // A MAC deliberately different from the configured device, so the
         // discovered result must be ignored rather than cached.
-        cache_discovered(&path, &[found("010203040506")]).unwrap();
+        cache_discovered(&path, &[found("deadbeefcafe")]).unwrap();
 
         let reloaded = Config::load(&path).unwrap();
         assert!(reloaded.resolve("kettle").unwrap().cached.is_none());
@@ -234,6 +234,6 @@ mod tests {
             .join(format!("d3home-test-cache-discovered-missing-{}", std::process::id()));
         let path = dir.join("devices.toml");
 
-        assert!(cache_discovered(&path, &[found("aabbccddeeff")]).is_ok());
+        assert!(cache_discovered(&path, &[found("deadbeefdead")]).is_ok());
     }
 }

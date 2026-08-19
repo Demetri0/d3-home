@@ -456,14 +456,14 @@ mod tests {
     #[test]
     fn reads_a_well_formed_service_record() {
         let found = parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt(PUBLIC, "29", "2"),
         )
         .unwrap();
 
-        assert_eq!(found.mac, "aabbccddeeff");
+        assert_eq!(found.mac, "deadbeefdead");
         assert_eq!(found.port, 8888);
         assert_eq!(found.address, IpAddr::from(Ipv4Addr::new(192, 168, 1, 42)));
         assert_eq!(found.interface, None, "a global address needs no scope");
@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn skips_link_local_addresses() {
         let found = parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[v4(Ipv4Addr::new(169, 254, 3, 4)), v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt(PUBLIC, "29", "2"),
@@ -494,7 +494,7 @@ mod tests {
         // or IPv6 -- always wins, since it needs no scope id and works
         // regardless of which interface traffic ends up leaving from.
         let found = parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[v6(kettle_link_local(), Some("enp8s0")), v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt(PUBLIC, "29", "2"),
@@ -512,7 +512,7 @@ mod tests {
         // "prefer IPv4, else fail" behaviour) would leave nothing to
         // connect to; the fix is to carry the scope through instead.
         let found = parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[v6(kettle_link_local(), Some("enp8s0"))],
             8888,
             &txt(PUBLIC, "29", "2"),
@@ -529,7 +529,7 @@ mod tests {
         // level with EINVAL; better to say so clearly here than to hand a
         // socket something doomed to fail.
         let err = parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[v6(kettle_link_local(), None)],
             8888,
             &txt(PUBLIC, "29", "2"),
@@ -546,7 +546,7 @@ mod tests {
     fn refuses_protocol_versions_it_was_not_written_for() {
         // Guessing at an unknown protocol version would be worse than saying so.
         assert!(parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt(PUBLIC, "29", "3"),
@@ -554,7 +554,7 @@ mod tests {
         .is_err());
 
         assert!(parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt(PUBLIC, "30", "2"),
@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn refuses_a_record_with_no_usable_address() {
         assert!(parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[v4(Ipv4Addr::new(169, 254, 3, 4))],
             8888,
             &txt(PUBLIC, "29", "2"),
@@ -576,7 +576,7 @@ mod tests {
     #[test]
     fn refuses_a_malformed_public_key() {
         assert!(parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[v4(Ipv4Addr::new(192, 168, 1, 42))],
             8888,
             &txt("abcd", "29", "2"),
@@ -603,8 +603,8 @@ mod tests {
         // the dedupe: the same MAC seen twice collapses to one entry, and
         // a global address wins over a link-local one regardless of which
         // was seen first.
-        let global = found_with("aabbccddeeff", v4(Ipv4Addr::new(192, 168, 1, 42)));
-        let link_local = found_with("aabbccddeeff", v6(kettle_link_local(), Some("enp8s0")));
+        let global = found_with("deadbeefdead", v4(Ipv4Addr::new(192, 168, 1, 42)));
+        let link_local = found_with("deadbeefdead", v6(kettle_link_local(), Some("enp8s0")));
 
         let link_local_first = dedupe_by_mac(vec![link_local.clone(), global.clone()]);
         assert_eq!(link_local_first, vec![global.clone()], "a global address must win regardless of order");
@@ -615,7 +615,7 @@ mod tests {
 
     #[test]
     fn find_all_keeps_devices_with_different_macs_separate() {
-        let a = found_with("aabbccddeeff", v4(Ipv4Addr::new(192, 168, 1, 42)));
+        let a = found_with("deadbeefdead", v4(Ipv4Addr::new(192, 168, 1, 42)));
         let b = found_with("112233445566", v4(Ipv4Addr::new(192, 168, 1, 43)));
 
         let kept = dedupe_by_mac(vec![a.clone(), b.clone()]);
@@ -627,8 +627,8 @@ mod tests {
         // Two link-local records for the same MAC, on different
         // interfaces: nothing in the protocol says which is more current,
         // so the first one seen must win, deterministically.
-        let first = found_with("aabbccddeeff", v6(kettle_link_local(), Some("enp8s0")));
-        let second = found_with("aabbccddeeff", v6(kettle_link_local(), Some("wlan0")));
+        let first = found_with("deadbeefdead", v6(kettle_link_local(), Some("enp8s0")));
+        let second = found_with("deadbeefdead", v6(kettle_link_local(), Some("wlan0")));
 
         let kept = dedupe_by_mac(vec![first.clone(), second]);
         assert_eq!(kept, vec![first]);

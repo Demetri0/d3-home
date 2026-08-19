@@ -165,7 +165,7 @@ name    = "kettle"
 aliases = ["k", "чайник"]
 driver  = "syncleo"
 model   = "PWK 1725CGLD"
-mac     = "aabbccddeeff"
+mac     = "deadbeefdead"
 token   = "..."
 
 # заполняется автоматически после первого дискавери

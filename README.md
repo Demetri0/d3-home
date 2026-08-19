@@ -31,7 +31,7 @@ name    = "kettle"
 aliases = ["k", "чайник"]
 driver  = "syncleo"
 model   = "PWK 1725CGLD"
-mac     = "aabbccddeeff"
+mac     = "deadbeefdead"
 token   = "..."
 
 # заполняется автоматически после первого удачного дискавери
@@ -54,7 +54,7 @@ public_key = "..."
 В приложении Polaris IQ Home поделитесь устройством — получится ссылка вида
 
 ```
-https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=deadbeefdeadbeefdeadbeefdeadbeef&name=PWK%201725CGLD
+https://l.polaris-iot.com/device-share/polaris/57/deadbeefdead?token=deadbeefdeadbeefdeadbeefdeadbeef&name=PWK%201725CGLD
 ```
 
 Дальше три способа, любой на выбор:
@@ -63,7 +63,7 @@ https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=deadbeefdea
 d3home add "<ссылка>" --name kettle     # из ссылки: mac и токен берутся из неё
 d3home add                              # в терминале: покажет найденные устройства
                                         # списком, спросит имя и токен
-d3home add --name kettle --mac aabbccddeeff --token <токен>
+d3home add --name kettle --mac deadbeefdead --token <токен>
 ```
 
 Интерактивный режим включается, только если в терминале есть кому отвечать: в

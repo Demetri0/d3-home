@@ -18,7 +18,7 @@ use crate::config::{Config, ConfigError, Device, RESERVED};
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The fields a share link carries. The vendor app produces links like
-/// `https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=…&name=PWK%201725CGLD`
+/// `https://l.polaris-iot.com/device-share/polaris/57/deadbeefdead?token=…&name=PWK%201725CGLD`
 /// -- the trailing path segment is the MAC, and the query carries the token
 /// and the model name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,12 +279,12 @@ fn ask_secret(what: &str) -> Result<String, AppError> {
 mod tests {
     use super::*;
 
-    const LINK: &str = "https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=deadbeefdeadbeefdeadbeefdeadbeef&name=PWK%201725CGLD";
+    const LINK: &str = "https://l.polaris-iot.com/device-share/polaris/57/deadbeefdead?token=deadbeefdeadbeefdeadbeefdeadbeef&name=PWK%201725CGLD";
 
     #[test]
     fn reads_a_share_link_from_the_vendor_app() {
         let link = parse_share_link(LINK).unwrap();
-        assert_eq!(link.mac, "aabbccddeeff");
+        assert_eq!(link.mac, "deadbeefdead");
         assert_eq!(link.token, "deadbeefdeadbeefdeadbeefdeadbeef");
         assert_eq!(link.model.as_deref(), Some("PWK 1725CGLD"));
     }
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn refuses_a_link_with_nothing_useful_in_it() {
         for bad in [
-            "https://example.com/device-share/polaris/57/aabbccddeeff",
+            "https://example.com/device-share/polaris/57/deadbeefdead",
             "https://example.com/?token=",
             "not a url at all",
         ] {
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn a_bare_url_argument_is_understood_as_a_link() {
         let request = parse_args(&[LINK.to_string()]).unwrap();
-        assert_eq!(request.mac.as_deref(), Some("aabbccddeeff"));
+        assert_eq!(request.mac.as_deref(), Some("deadbeefdead"));
         assert_eq!(request.model.as_deref(), Some("PWK 1725CGLD"));
         assert!(request.name.is_none(), "the link carries a model, not a name");
     }
@@ -330,7 +330,7 @@ mod tests {
 
         let request = AddRequest {
             name: Some("kettle".into()),
-            mac: Some("aabbccddeeff".into()),
+            mac: Some("deadbeefdead".into()),
             ..Default::default()
         };
         let err = resolve(request, false).unwrap_err().to_string();
@@ -341,7 +341,7 @@ mod tests {
     fn a_token_that_could_never_work_is_refused_before_it_reaches_the_config() {
         let request = AddRequest {
             name: Some("kettle".into()),
-            mac: Some("aabbccddeeff".into()),
+            mac: Some("deadbeefdead".into()),
             token: Some("nothex".into()),
             ..Default::default()
         };
@@ -353,7 +353,7 @@ mod tests {
         for name in ["", "--json", "discover"] {
             let request = AddRequest {
                 name: Some(name.into()),
-                mac: Some("aabbccddeeff".into()),
+                mac: Some("deadbeefdead".into()),
                 token: Some("deadbeefdeadbeefdeadbeefdeadbeef".into()),
                 ..Default::default()
             };

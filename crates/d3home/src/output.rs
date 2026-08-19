@@ -743,7 +743,7 @@ mod tests {
             aliases: Vec::new(),
             driver: "syncleo".into(),
             model: Some("PWK 1725CGLD".into()),
-            mac: "aabbccddeeff".into(),
+            mac: "deadbeefdead".into(),
             token: "deadbeefdeadbeefdeadbeefdeadbeef".into(),
             cached: None,
         }
@@ -889,7 +889,7 @@ mod tests {
 
     fn sample_found() -> Found {
         Found {
-            mac: "aabbccddeeff".into(),
+            mac: "deadbeefdead".into(),
             address: Ipv4Addr::new(192, 168, 1, 42).into(),
             interface: None,
             port: 8888,
@@ -901,7 +901,7 @@ mod tests {
 
     fn link_local_found() -> Found {
         Found {
-            mac: "aabbccddeeff".into(),
+            mac: "deadbeefdead".into(),
             address: "fe80::dead:beef:dead:beef".parse().unwrap(),
             interface: Some("enp8s0".into()),
             port: 8888,

@@ -731,8 +731,8 @@ mod tests {
         // Pinned loosely on purpose: this checks the load-bearing content
         // (the mac, and the off-base/unpowered hint) survives a future
         // rewording, not the exact sentence.
-        let message = not_found_message("kettle", "aabbccddeeff");
-        assert!(message.contains("aabbccddeeff"), "mac missing from: {message}");
+        let message = not_found_message("kettle", "deadbeefdead");
+        assert!(message.contains("deadbeefdead"), "mac missing from: {message}");
         assert!(message.contains("kettle"), "device name missing from: {message}");
         let lower = message.to_lowercase();
         assert!(lower.contains("base"), "off-base hint missing from: {message}");
@@ -849,7 +849,7 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\n\
+                "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"deadbeefdead\"\n\
                  token = \"{}\"\n\n[devices.cached]\naddress = \"fe80::dead:beef:dead:beef\"\n\
                  port = 8888\npublic_key = \"{}\"\ninterface = \"d3home-no-such-iface\"\n",
                 hex_encode(&TOKEN),
@@ -862,7 +862,7 @@ mod tests {
         let device = config.resolve("kettle").unwrap();
 
         let found = Found {
-            mac: "aabbccddeeff".into(),
+            mac: "deadbeefdead".into(),
             address: handle.addr.ip(),
             interface: None,
             port: handle.addr.port(),
@@ -898,7 +898,7 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\n\
+                "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"deadbeefdead\"\n\
                  token = \"{}\"\n\n[devices.cached]\naddress = \"fe80::dead:beef:dead:beef\"\n\
                  port = 8888\npublic_key = \"{}\"\ninterface = \"d3home-no-such-iface\"\n",
                 hex_encode(&TOKEN),
@@ -942,7 +942,7 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\n\
+                "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"deadbeefdead\"\n\
                  token = \"{}\"\n\n[devices.cached]\naddress = \"fe80::dead:beef:dead:beef\"\n\
                  port = 8888\npublic_key = \"{}\"\ninterface = \"d3home-no-such-iface\"\n",
                 hex_encode(&TOKEN),
@@ -955,7 +955,7 @@ mod tests {
         let device = config.resolve("kettle").unwrap().clone();
 
         let found = Found {
-            mac: "aabbccddeeff".into(),
+            mac: "deadbeefdead".into(),
             address: handle.addr.ip(),
             interface: None,
             port: handle.addr.port(),
@@ -991,7 +991,7 @@ mod tests {
 
     fn sample_kettle_toml(token: &str) -> String {
         format!(
-            "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"{token}\"\n"
+            "[[devices]]\nname = \"kettle\"\ndriver = \"syncleo\"\nmac = \"deadbeefdead\"\ntoken = \"{token}\"\n"
         )
     }
 

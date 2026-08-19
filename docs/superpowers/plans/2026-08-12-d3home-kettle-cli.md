@@ -1479,14 +1479,14 @@ mod tests {
     #[test]
     fn reads_a_well_formed_service_record() {
         let found = parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[Ipv4Addr::new(192, 168, 1, 42).into()],
             8888,
             &txt(PUBLIC, "29", "2"),
         )
         .unwrap();
 
-        assert_eq!(found.mac, "aabbccddeeff");
+        assert_eq!(found.mac, "deadbeefdead");
         assert_eq!(found.port, 8888);
         assert_eq!(found.address, Ipv4Addr::new(192, 168, 1, 42).into());
         assert_eq!(found.public_wire.len(), 32);
@@ -1495,7 +1495,7 @@ mod tests {
     #[test]
     fn skips_link_local_addresses() {
         let found = parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[Ipv4Addr::new(169, 254, 3, 4).into(), Ipv4Addr::new(192, 168, 1, 42).into()],
             8888,
             &txt(PUBLIC, "29", "2"),
@@ -1509,7 +1509,7 @@ mod tests {
     fn refuses_protocol_versions_it_was_not_written_for() {
         // Guessing at an unknown protocol version would be worse than saying so.
         assert!(parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[Ipv4Addr::new(192, 168, 1, 42).into()],
             8888,
             &txt(PUBLIC, "29", "3"),
@@ -1517,7 +1517,7 @@ mod tests {
         .is_err());
 
         assert!(parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[Ipv4Addr::new(192, 168, 1, 42).into()],
             8888,
             &txt(PUBLIC, "30", "2"),
@@ -1528,7 +1528,7 @@ mod tests {
     #[test]
     fn refuses_a_record_with_no_usable_address() {
         assert!(parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[Ipv4Addr::new(169, 254, 3, 4).into()],
             8888,
             &txt(PUBLIC, "29", "2"),
@@ -1539,7 +1539,7 @@ mod tests {
     #[test]
     fn refuses_a_malformed_public_key() {
         assert!(parse_service(
-            "aabbccddeeff._syncleo._udp.local.",
+            "deadbeefdead._syncleo._udp.local.",
             &[Ipv4Addr::new(192, 168, 1, 42).into()],
             8888,
             &txt("abcd", "29", "2"),
@@ -1614,7 +1614,7 @@ mod tests {
 name = "kettle"
 aliases = ["k", "чайник"]
 driver = "syncleo"
-mac = "aabbccddeeff"
+mac = "deadbeefdead"
 token = "deadbeefdeadbeefdeadbeefdeadbeef"
 "#;
 
@@ -1763,7 +1763,7 @@ mod support {
 name = "kettle"
 aliases = ["k"]
 driver = "syncleo"
-mac = "aabbccddeeff"
+mac = "deadbeefdead"
 token = "{token}"
 
 [devices.cached]
@@ -1973,7 +1973,7 @@ git commit -m "Add the d3home command line interface"
 
 Запустить: `cargo run -p d3home -- discover`
 
-Ожидается: MAC `aabbccddeeff`, адрес, порт. Если пусто — проверить, что машина в одной
+Ожидается: MAC `deadbeefdead`, адрес, порт. Если пусто — проверить, что машина в одной
 сети с чайником и что mDNS не режется. **Не запускать под песочницей, режущей мультикаст:
 именно из-за неё скан на этапе дизайна не увидел ни одного сервиса.** Если mDNS до
 устройства не доходит принципиально, вписать `address`, `port` и `public_key` в

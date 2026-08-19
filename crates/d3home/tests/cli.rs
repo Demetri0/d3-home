@@ -19,7 +19,7 @@ mod support {
         // falls back to mDNS discovery by design -- which on a home network would
         // find the real kettle and send it whatever the test was sending, `start`
         // included. A MAC that matches nothing keeps that path harmless.
-        config_with_mac(addr, public_key, token, "aabbccddeeff")
+        config_with_mac(addr, public_key, token, "deadbeefdead")
     }
 
     /// Like [`config_with`], but lets a test pick its own MAC.
@@ -930,7 +930,7 @@ fn add_creates_the_registry_when_there_is_none_yet() {
             "--config",
             path.to_str().unwrap(),
             "add",
-            "https://l.polaris-iot.com/device-share/polaris/57/aabbccddeeff?token=deadbeefdeadbeefdeadbeefdeadbeef&name=PWK%201725CGLD",
+            "https://l.polaris-iot.com/device-share/polaris/57/deadbeefdead?token=deadbeefdeadbeefdeadbeefdeadbeef&name=PWK%201725CGLD",
             "--name",
             "kettle",
         ])
@@ -971,7 +971,7 @@ fn add_refuses_a_second_device_with_the_same_name() {
         "--name",
         "kettle",
         "--mac",
-        "aabbccddeeff",
+        "deadbeefdead",
         "--token",
         "deadbeefdeadbeefdeadbeefdeadbeef",
     ];
@@ -1111,7 +1111,7 @@ fn add_confirms_itself_in_whichever_shape_was_asked_for() {
         "--name",
         "kettle",
         "--mac",
-        "aabbccddeeff",
+        "deadbeefdead",
         "--token",
         "deadbeefdeadbeefdeadbeefdeadbeef",
     ];

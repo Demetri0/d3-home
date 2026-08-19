@@ -492,7 +492,7 @@ mod tests {
 name = "kettle"
 aliases = ["k", "чайник"]
 driver = "syncleo"
-mac = "aabbccddeeff"
+mac = "deadbeefdead"
 token = "deadbeefdeadbeefdeadbeefdeadbeef"
 "#;
 
@@ -680,7 +680,7 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         // this must neither panic nor echo the token.
         let token = "deadbeefdeadbeefdeadbeefdeadbeef";
         let toml = format!(
-            "[[devices]]\nname = \"kettle\"\naliases = [\"k\", \"чайник\"]\ndriver = \"syncleo\"\nmac = \"aabbccddeeff\"\ntoken = \"{token}\n"
+            "[[devices]]\nname = \"kettle\"\naliases = [\"k\", \"чайник\"]\ndriver = \"syncleo\"\nmac = \"deadbeefdead\"\ntoken = \"{token}\n"
         );
 
         let dir = std::env::temp_dir().join(format!("d3home-test-multibyte-{}", std::process::id()));
@@ -814,21 +814,21 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         let dir = std::env::temp_dir().join(format!("d3home-test-mac-case-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("devices.toml");
-        std::fs::write(&path, KETTLE.replace(r#"mac = "aabbccddeeff""#, r#"mac = "AA:BB:CC:DD:EE:FF""#))
+        std::fs::write(&path, KETTLE.replace(r#"mac = "deadbeefdead""#, r#"mac = "DE:AD:BE:EF:DE:AD""#))
             .unwrap();
 
         let config = Config::load(&path).unwrap();
-        assert_eq!(config.resolve("kettle").unwrap().mac, "aabbccddeeff");
+        assert_eq!(config.resolve("kettle").unwrap().mac, "deadbeefdead");
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn normalize_mac_lowercases_and_strips_common_separators() {
-        assert_eq!(normalize_mac("aabbccddeeff"), "aabbccddeeff");
-        assert_eq!(normalize_mac("AABBCCDDEEFF"), "aabbccddeeff");
-        assert_eq!(normalize_mac("AA:BB:CC:DD:EE:FF"), "aabbccddeeff");
-        assert_eq!(normalize_mac("aa-bb-cc-dd-ee-ff"), "aabbccddeeff");
+        assert_eq!(normalize_mac("deadbeefdead"), "deadbeefdead");
+        assert_eq!(normalize_mac("DEADBEEFDEAD"), "deadbeefdead");
+        assert_eq!(normalize_mac("DE:AD:BE:EF:DE:AD"), "deadbeefdead");
+        assert_eq!(normalize_mac("de-ad-be-ef-de-ad"), "deadbeefdead");
     }
 
     #[test]
