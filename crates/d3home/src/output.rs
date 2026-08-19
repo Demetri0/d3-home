@@ -265,6 +265,101 @@ fn event_human(event: &Event) -> String {
 /// `Err` means the write failed (most commonly a broken pipe), and the
 /// caller decides what to do about it rather than this panicking on a
 /// downstream reader that has simply gone away.
+/// Renders a `watch` stream, keeping one live progress line at the bottom
+/// on a capable terminal.
+///
+/// The device sends a temperature reading for every single degree, so a
+/// full boil is nearly sixty lines of near-identical text. On a terminal
+/// that can redraw, one line that moves is both shorter and easier to read
+/// than sixty that scroll. Anywhere else -- a pipe, a log, `--json` -- every
+/// reading stays its own line, because something is parsing them.
+pub struct WatchView {
+    style: Style,
+    json: bool,
+    target: Option<u8>,
+    /// The reading this heat started from, so the bar has a low end that
+    /// means something rather than an invented zero.
+    started_at: Option<u8>,
+    live: bool,
+}
+
+impl WatchView {
+    pub fn new(json: bool) -> Self {
+        Self { style: Style::detect(), json, target: None, started_at: None, live: false }
+    }
+
+    fn animated(&self) -> bool {
+        self.style.is_rich() && !self.json
+    }
+
+    /// Erase the live line, if there is one, so ordinary output can be
+    /// written without landing on top of it.
+    fn clear_live(&mut self) -> std::io::Result<()> {
+        if self.live {
+            self.live = false;
+            print!("\r{:width$}\r", "", width = 48);
+            std::io::Write::flush(&mut std::io::stdout())?;
+        }
+        Ok(())
+    }
+
+    pub fn event(&mut self, event: &Event) -> std::io::Result<()> {
+        match event {
+            Event::TargetTemperature(t) => self.target = Some(*t),
+            Event::Mode(PowerMode::Off) => {
+                self.target = None;
+                self.started_at = None;
+            }
+            _ => {}
+        }
+
+        if let (true, Event::CurrentTemperature(current)) = (self.animated(), event) {
+            if self.started_at.is_none() {
+                self.started_at = Some(*current);
+            }
+            if let Some(line) = self.progress_line(*current) {
+                self.clear_live()?;
+                print!("\r{line}");
+                std::io::Write::flush(&mut std::io::stdout())?;
+                self.live = true;
+                return Ok(());
+            }
+        }
+
+        self.clear_live()?;
+        print_event(event, self.json)
+    }
+
+    /// Called when the stream ends, so the last live line is not left
+    /// dangling without a newline.
+    pub fn finish(&mut self) {
+        if self.live {
+            self.live = false;
+            let _ = write_line("");
+        }
+    }
+
+    fn progress_line(&self, current: u8) -> Option<String> {
+        let target = self.target?;
+        let from = self.started_at.unwrap_or(current).min(current);
+        if target <= from {
+            return None;
+        }
+        let span = f64::from(target - from);
+        let done = f64::from(current.saturating_sub(from)) / span;
+        let width = 20;
+        let filled = ((done * f64::from(width)).round() as usize).min(width as usize);
+
+        Some(format!(
+            "  {} {}{}  {}",
+            self.style.bold(&format!("{current} \u{00b0}C")),
+            self.style.green(&"\u{2588}".repeat(filled)),
+            self.style.dim(&"\u{2591}".repeat(width as usize - filled)),
+            self.style.dim(&format!("{target} \u{00b0}C")),
+        ))
+    }
+}
+
 pub fn print_watch_reconnected(json: bool) -> std::io::Result<()> {
     let line = if json { reconnected_json().to_string() } else { RECONNECTED_HUMAN.to_string() };
     write_line(&line)
@@ -374,6 +469,44 @@ pub fn print_stopped(json: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_heating_bar_fills_as_the_temperature_climbs() {
+        let mut view = WatchView { style: Style::Rich, json: false, target: Some(60), started_at: Some(40), live: false };
+        let empty = view.progress_line(40).expect("a bar at the start");
+        let half = view.progress_line(50).expect("a bar halfway");
+        let full = view.progress_line(60).expect("a bar at the target");
+
+        let filled = |s: &str| s.matches('\u{2588}').count();
+        assert_eq!(filled(&empty), 0);
+        assert_eq!(filled(&half), 10, "half of a 20-wide bar");
+        assert_eq!(filled(&full), 20);
+        assert!(full.contains("60 \u{00b0}C"));
+        view.finish();
+    }
+
+    #[test]
+    fn there_is_no_bar_without_a_target_to_aim_at() {
+        // Off, or freshly connected and not told a target yet: a bar with an
+        // invented endpoint would be a guess dressed up as information.
+        let view = WatchView { style: Style::Rich, json: false, target: None, started_at: None, live: false };
+        assert!(view.progress_line(40).is_none());
+
+        let cooling = WatchView { style: Style::Rich, json: false, target: Some(40), started_at: Some(60), live: false };
+        assert!(cooling.progress_line(60).is_none(), "nothing to fill when already past the target");
+    }
+
+    #[test]
+    fn json_and_plain_streams_keep_one_line_per_reading() {
+        // Something is parsing those, so they must not be collapsed into a
+        // single redrawn line.
+        for (style, json) in [(Style::Plain, false), (Style::Rich, true), (Style::Plain, true)] {
+            let view = WatchView { style, json, target: Some(60), started_at: Some(40), live: false };
+            assert!(!view.animated(), "style {style:?} json {json} should not animate");
+        }
+        let rich = WatchView { style: Style::Rich, json: false, target: Some(60), started_at: Some(40), live: false };
+        assert!(rich.animated());
+    }
 
     #[test]
     fn the_rich_status_block_lines_its_values_up() {

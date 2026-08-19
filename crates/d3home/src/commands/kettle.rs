@@ -233,13 +233,15 @@ fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError
     // tries that one first instead of the address `watch` started with.
     let mut device = device.clone();
     let (mut client, cached) = connect_with(&device, config_path, MdnsDiscovery::new)?;
+    let mut view = output::WatchView::new(json);
     device.cached = Some(cached);
 
     loop {
-        let result = client.watch(|event| match output::print_event(&event, json) {
+        let result = client.watch(|event| match view.event(&event) {
             Ok(()) => ControlFlow::Continue(()),
             Err(_) => ControlFlow::Break(()),
         });
+        view.finish();
 
         let err = match result {
             Ok(()) => return Ok(()),
