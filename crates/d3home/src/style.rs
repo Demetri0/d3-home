@@ -65,6 +65,21 @@ impl Style {
     pub fn red(self, text: &str) -> String {
         self.paint("31", text)
     }
+
+    /// Bright green: the kettle is doing something.
+    pub fn bright_green(self, text: &str) -> String {
+        self.paint("92", text)
+    }
+
+    /// Bright yellow: reserved for the one thing the eye should find first.
+    pub fn yellow(self, text: &str) -> String {
+        self.paint("93", text)
+    }
+
+    /// Plain white: present, but not happening.
+    pub fn white(self, text: &str) -> String {
+        self.paint("37", text)
+    }
 }
 
 #[cfg(test)]

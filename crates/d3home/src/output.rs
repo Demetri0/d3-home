@@ -216,8 +216,8 @@ fn event_json(event: &Event) -> serde_json::Value {
 fn event_human(event: &Event) -> String {
     match event {
         Event::Mode(m) => format!("mode: {}", mode_str(*m)),
-        Event::TargetTemperature(t) => format!("target temperature: {t}\u{b0}C"),
-        Event::CurrentTemperature(t) => format!("current temperature: {t}\u{b0}C"),
+        Event::TargetTemperature(t) => format!("target temperature: {t} \u{b0}C"),
+        Event::CurrentTemperature(t) => format!("current temperature: {t} \u{b0}C"),
         Event::Volume(v) => format!("volume: {v}"),
         Event::Error(b) => format!("error: {}", yes_no(*b)),
         Event::ChildLock(b) => format!("child lock: {}", yes_no(*b)),
@@ -283,9 +283,6 @@ pub struct WatchView {
     /// while switched off, so a bar drawn from the target alone would
     /// promise a heat that is not happening.
     heating: bool,
-    /// The reading this heat started from, so the bar has a low end that
-    /// means something rather than an invented zero.
-    started_at: Option<u8>,
     live: bool,
 }
 
@@ -297,7 +294,6 @@ impl WatchView {
             target: None,
             current: None,
             heating: false,
-            started_at: None,
             live: false,
         }
     }
@@ -336,18 +332,8 @@ impl WatchView {
     pub fn event(&mut self, event: &Event) -> std::io::Result<()> {
         match event {
             Event::TargetTemperature(t) => self.target = Some(*t),
-            Event::CurrentTemperature(t) => {
-                self.current = Some(*t);
-                if self.started_at.is_none() {
-                    self.started_at = Some(*t);
-                }
-            }
-            Event::Mode(mode) => {
-                self.heating = *mode != PowerMode::Off;
-                if !self.heating {
-                    self.started_at = None;
-                }
-            }
+            Event::CurrentTemperature(t) => self.current = Some(*t),
+            Event::Mode(mode) => self.heating = *mode != PowerMode::Off,
             _ => {}
         }
 
@@ -383,35 +369,43 @@ impl WatchView {
         };
         let reading = self.style.bold(&format!("{current} \u{00b0}C"));
 
-        match self.bar(current) {
-            Some(bar) => bar,
-            // No target to aim at -- an idle kettle, or one that has not said
-            // yet. Showing the reading alone beats inventing an endpoint.
-            None => format!("  {reading}"),
-        }
+        // The bar is drawn whether or not the kettle is heating: an absolute
+        // scale is meaningful either way, and the colour says which it is.
+        self.bar(current).unwrap_or_else(|| format!("  {reading}"))
     }
 
+    /// The scale is absolute, 0 to 100 °C, so a glance always means the same
+    /// thing: the dots do not rescale when the target changes, and a kettle
+    /// at 40 °C looks the same whether it is heading for 60 or for boiling.
     fn bar(&self, current: u8) -> Option<String> {
-        if !self.heating {
-            return None;
-        }
-        let target = self.target?;
-        let from = self.started_at.unwrap_or(current).min(current);
-        if target <= from {
-            return None;
-        }
-        let span = f64::from(target - from);
-        let done = f64::from(current.saturating_sub(from)) / span;
-        let width = 20;
-        let filled = ((done * f64::from(width)).round() as usize).min(width as usize);
+        const CELLS: usize = 25;
+        let cell_of = |t: u8| (usize::from(t) * CELLS).div_ceil(100).min(CELLS).saturating_sub(1);
 
-        Some(format!(
-            "  {} {}{}  {}",
-            self.style.bold(&format!("{current} \u{00b0}C")),
-            self.style.green(&"\u{2588}".repeat(filled)),
-            self.style.dim(&"\u{2591}".repeat(width as usize - filled)),
-            self.style.dim(&format!("{target} \u{00b0}C")),
-        ))
+        let filled = cell_of(current);
+        let target_cell = self.target.map(cell_of);
+
+        let mut track = String::new();
+        for i in 0..CELLS {
+            if Some(i) == target_cell {
+                // The one thing worth finding at a glance.
+                track.push_str(&self.style.yellow("\u{25c9}"));
+            } else if i <= filled {
+                let dot = "\u{25cf}";
+                track.push_str(&if self.heating {
+                    self.style.bright_green(dot)
+                } else {
+                    self.style.white(dot)
+                });
+            } else {
+                track.push_str(&self.style.dim("\u{00b7}"));
+            }
+        }
+
+        let mut out = format!("  {}  {track}", self.style.bold(&format!("{current} \u{00b0}C")));
+        if let Some(target) = self.target {
+            out.push_str(&format!("  {}", self.style.dim(&format!("{target} \u{00b0}C"))));
+        }
+        Some(out)
     }
 }
 
@@ -526,89 +520,75 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_idle_kettle_gets_no_bar_even_though_it_remembers_a_target() {
-        // The device keeps its last target while switched off. A bar drawn
-        // from that alone promises a heat that is not happening.
-        let mut view = WatchView::new(false);
-        view.style = Style::Rich;
-        view.event(&Event::TargetTemperature(100)).unwrap();
-        view.event(&Event::Mode(PowerMode::Off)).unwrap();
-        view.event(&Event::CurrentTemperature(82)).unwrap();
-
-        let line = view.status_line();
-        assert!(!line.contains('\u{2591}'), "bar drawn for an off kettle: {line:?}");
-        assert!(line.contains("82"), "the reading should still show: {line:?}");
-
-        view.event(&Event::Mode(PowerMode::On)).unwrap();
-        view.event(&Event::CurrentTemperature(83)).unwrap();
-        assert!(view.status_line().contains('\u{2591}'), "bar missing once heating");
-        view.finish();
-    }
-
-    #[test]
     fn the_bar_is_on_screen_before_the_kettle_has_said_anything() {
         // Staring at a blank terminal until the device happens to speak is
         // indistinguishable from the tool being broken.
         let view = WatchView::new(false);
         let line = view.status_line();
-        assert!(!line.trim().is_empty(), "nothing to show at start");
         assert!(line.contains("waiting"), "got {line:?}");
     }
 
+    fn view_at(current: u8, target: Option<u8>, heating: bool) -> WatchView {
+        WatchView { style: Style::Rich, json: false, target, current: Some(current), heating, live: false }
+    }
+
+    fn count(line: &str, glyph: char) -> usize {
+        line.matches(glyph).count()
+    }
+
     #[test]
-    fn a_reading_without_a_target_still_shows_the_temperature() {
-        let mut view = WatchView { style: Style::Rich, json: false, target: None, current: Some(41), heating: false, started_at: Some(41), live: false };
-        assert!(view.status_line().contains("41"), "reading lost: {:?}", view.status_line());
-        assert!(view.bar(41).is_none(), "no target means no bar");
-        view.finish();
+    fn the_scale_is_absolute_so_the_same_reading_always_looks_the_same() {
+        // The dots must not rescale when the target changes: 40 °C is 40 °C
+        // whether the kettle is heading for 60 or for boiling.
+        let to_sixty = view_at(40, Some(60), true).bar(40).unwrap();
+        let to_boil = view_at(40, Some(100), true).bar(40).unwrap();
+        assert_eq!(count(&to_sixty, '\u{25cf}'), count(&to_boil, '\u{25cf}'));
+    }
+
+    #[test]
+    fn the_target_is_marked_with_a_ring_the_eye_can_find() {
+        let heating = view_at(40, Some(60), true).bar(40).unwrap();
+        assert_eq!(count(&heating, '\u{25c9}'), 1, "exactly one ring: {heating:?}");
+        assert!(heating.contains("\u{1b}[93m"), "the ring should stand out: {heating:?}");
+    }
+
+    #[test]
+    fn colour_says_whether_it_is_heating_not_the_shape() {
+        // Same temperature, same dots -- only the colour differs, so a
+        // glance at an idle kettle is never mistaken for a heat in progress.
+        let hot = view_at(76, Some(100), true).bar(76).unwrap();
+        let cold = view_at(76, Some(100), false).bar(76).unwrap();
+        assert_eq!(count(&hot, '\u{25cf}'), count(&cold, '\u{25cf}'));
+        assert!(hot.contains("\u{1b}[92m"), "heating should be green: {hot:?}");
+        assert!(cold.contains("\u{1b}[37m"), "idle should be plain: {cold:?}");
+        assert!(!cold.contains("\u{1b}[92m"));
+    }
+
+    #[test]
+    fn a_kettle_that_has_not_named_a_target_still_gets_a_bar() {
+        let line = view_at(41, None, false).bar(41).unwrap();
+        assert_eq!(count(&line, '\u{25c9}'), 0, "no target, no ring: {line:?}");
+        assert!(line.contains("41"));
     }
 
     #[test]
     fn every_event_keeps_the_bar_as_the_last_thing_drawn() {
-        // The point of the change: the bar must not vanish between
-        // temperature readings, so any event redraws it.
-        let mut view = WatchView { style: Style::Rich, json: false, target: Some(60), current: Some(50), heating: true, started_at: Some(40), live: false };
+        // The bar must not vanish between temperature readings, so any
+        // event redraws it.
+        let mut view = view_at(50, Some(60), true);
         view.event(&Event::Backlight(true)).unwrap();
         assert!(view.live, "an unrelated event left no bar behind");
         view.finish();
     }
 
     #[test]
-    fn the_heating_bar_fills_as_the_temperature_climbs() {
-        let mut view = WatchView { style: Style::Rich, json: false, target: Some(60), current: Some(40), heating: true, started_at: Some(40), live: false };
-        let empty = view.bar(40).expect("a bar at the start");
-        let half = view.bar(50).expect("a bar halfway");
-        let full = view.bar(60).expect("a bar at the target");
-
-        let filled = |s: &str| s.matches('\u{2588}').count();
-        assert_eq!(filled(&empty), 0);
-        assert_eq!(filled(&half), 10, "half of a 20-wide bar");
-        assert_eq!(filled(&full), 20);
-        assert!(full.contains("60 \u{00b0}C"));
-        view.finish();
-    }
-
-    #[test]
-    fn there_is_no_bar_without_a_target_to_aim_at() {
-        // Off, or freshly connected and not told a target yet: a bar with an
-        // invented endpoint would be a guess dressed up as information.
-        let view = WatchView { style: Style::Rich, json: false, target: None, current: None, heating: false, started_at: None, live: false };
-        assert!(view.bar(40).is_none());
-
-        let cooling = WatchView { style: Style::Rich, json: false, target: Some(40), current: Some(60), heating: true, started_at: Some(60), live: false };
-        assert!(cooling.bar(60).is_none(), "nothing to fill when already past the target");
-    }
-
-    #[test]
     fn json_and_plain_streams_keep_one_line_per_reading() {
-        // Something is parsing those, so they must not be collapsed into a
-        // single redrawn line.
+        // Something is parsing those, so they must not be collapsed.
         for (style, json) in [(Style::Plain, false), (Style::Rich, true), (Style::Plain, true)] {
-            let view = WatchView { style, json, target: Some(60), current: Some(40), heating: true, started_at: Some(40), live: false };
+            let view = WatchView { style, json, target: Some(60), current: Some(40), heating: true, live: false };
             assert!(!view.animated(), "style {style:?} json {json} should not animate");
         }
-        let rich = WatchView { style: Style::Rich, json: false, target: Some(60), current: Some(40), heating: true, started_at: Some(40), live: false };
-        assert!(rich.animated());
+        assert!(view_at(40, Some(60), true).animated());
     }
 
     #[test]
