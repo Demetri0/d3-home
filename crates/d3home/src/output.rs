@@ -293,9 +293,9 @@ pub struct WatchView {
     /// know when one of them *changed*. Nothing is announced until there is
     /// something to compare against.
     announced: bool,
-    /// The row reserved at the top of the screen, when the terminal can
-    /// spare one. Without it the bar falls back to a line at the bottom.
-    top: crate::screen::TopBar,
+    /// The redrawn block: the bar, a blank line, and the last few log lines.
+    /// Inactive without a terminal, where every line must be kept.
+    block: crate::screen::Block,
     live: bool,
 }
 
@@ -310,7 +310,7 @@ impl WatchView {
             error: None,
             child_lock: None,
             announced: false,
-            top: crate::screen::TopBar::new(false),
+            block: crate::screen::Block::new(false),
             live: false,
         }
     }
@@ -324,7 +324,7 @@ impl WatchView {
     /// a blank terminal until the kettle happens to say something.
     pub fn start(&mut self) {
         if self.animated() {
-            self.top = crate::screen::TopBar::new(true);
+            self.block = crate::screen::Block::new(true);
             self.redraw();
         }
     }
@@ -341,8 +341,9 @@ impl WatchView {
 
     /// Draw the bar as the last thing on screen.
     fn redraw(&mut self) {
-        if self.top.is_active() {
-            self.top.draw(&self.status_line());
+        if self.block.is_active() {
+            let line = self.status_line();
+            self.block.render(&line);
             return;
         }
         self.clear_live();
@@ -360,8 +361,13 @@ impl WatchView {
         }
 
         if let Some(note) = self.absorb(event) {
-            self.clear_live();
-            write_line(&format!("{}  {note}", self.style.dim(&crate::clock::hms())))?;
+            let line = format!("{}  {note}", self.style.dim(&crate::clock::hms()));
+            if self.block.is_active() {
+                self.block.push(line);
+            } else {
+                self.clear_live();
+                write_line(&line)?;
+            }
         }
         if self.animated() {
             self.redraw();
@@ -449,6 +455,7 @@ impl WatchView {
     /// Called when the stream ends, so the bar is not left dangling without
     /// a newline.
     pub fn finish(&mut self) {
+        self.block.finish();
         if self.live {
             self.live = false;
             let _ = write_line("");
@@ -698,7 +705,7 @@ mod tests {
     fn view_at(current: u8, target: Option<u8>, heating: bool) -> WatchView {
         WatchView { style: Style::Rich, json: false, target, current: Some(current), heating,
             error: None, child_lock: None, announced: true,
-            top: crate::screen::TopBar::new(false), live: false }
+            block: crate::screen::Block::new(false), live: false }
     }
 
     #[test]
@@ -717,7 +724,7 @@ mod tests {
         for (style, json) in [(Style::Plain, false), (Style::Rich, true), (Style::Plain, true)] {
             let view = WatchView { style, json, target: Some(60), current: Some(40), heating: true,
                 error: None, child_lock: None, announced: true,
-            top: crate::screen::TopBar::new(false), live: false };
+            block: crate::screen::Block::new(false), live: false };
             assert!(!view.animated(), "style {style:?} json {json} should not animate");
         }
         assert!(view_at(40, Some(60), true).animated());
