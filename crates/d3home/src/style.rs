@@ -76,9 +76,10 @@ impl Style {
         self.paint("93", text)
     }
 
-    /// Plain white: present, but not happening.
-    pub fn white(self, text: &str) -> String {
-        self.paint("37", text)
+    /// Bright white: a real reading, just not a heat in progress. Bright
+    /// enough to read as data rather than as greyed-out chrome.
+    pub fn bright_white(self, text: &str) -> String {
+        self.paint("97", text)
     }
 }
 

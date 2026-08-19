@@ -241,14 +241,21 @@ impl Client {
     /// are handed to the callback rather than printed, leaving room for
     /// whatever the caller wants to do with them (notifications, logging,
     /// a UI).
+    /// `keep_going` is polled between reads so a caller can stop for a
+    /// reason of its own -- a keypress, a shutdown signal -- without this
+    /// crate needing to know what a terminal is.
     pub fn watch(
         &mut self,
         mut on_event: impl FnMut(Event) -> ControlFlow<()>,
+        mut keep_going: impl FnMut() -> bool,
     ) -> Result<(), Error> {
         if let Some(err) = self.already_lost() {
             return Err(err);
         }
         loop {
+            if !keep_going() {
+                return Ok(());
+            }
             let actions = self.pump(POLL_INTERVAL)?;
             for action in actions {
                 match action {
@@ -382,7 +389,7 @@ mod tests {
         let mut client = Client::from_parts(Box::new(NullTransport), session);
 
         let start = Instant::now();
-        let err = client.watch(|_| ControlFlow::Continue(())).expect_err("must not watch a dead session");
+        let err = client.watch(|_| ControlFlow::Continue(()), || true).expect_err("must not watch a dead session");
         assert!(start.elapsed() < Duration::from_millis(500), "must fail immediately, took {:?}", start.elapsed());
         assert!(matches!(err, Error::Silence), "got {err:?}");
     }

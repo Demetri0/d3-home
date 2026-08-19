@@ -97,7 +97,7 @@ fn status(device: &Device, json: bool, config_path: &Path) -> Result<(), AppErro
     let state = with_spinner(Phase::WaitingForState, || {
         client.collect_state(STATUS_QUIET_WINDOW, STATUS_OVERALL_DEADLINE)
     })?;
-    output::print_state(&state, &device.name, json);
+    output::print_state(&state, device, json);
 
     // The device has its own notion of an error condition (no water,
     // overheat, ...), separate from anything going wrong in the transport
@@ -235,16 +235,25 @@ fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError
     // tries that one first instead of the address `watch` started with.
     let mut device = device.clone();
     let (mut client, cached) = connect_with(&device, config_path, MdnsDiscovery::new)?;
+    // Restores the terminal on every exit path, including a signal.
+    let keys = crate::keys::QuitOnKey::start();
+    let quit = keys.quit();
     let mut view = output::WatchView::new(json);
     view.start();
     device.cached = Some(cached);
 
     loop {
-        let result = client.watch(|event| match view.event(&event) {
-            Ok(()) => ControlFlow::Continue(()),
-            Err(_) => ControlFlow::Break(()),
-        });
+        let result = client.watch(
+            |event| match view.event(&event) {
+                Ok(()) => ControlFlow::Continue(()),
+                Err(_) => ControlFlow::Break(()),
+            },
+            || !quit.requested(),
+        );
         view.finish();
+        if quit.requested() {
+            return Ok(());
+        }
 
         let err = match result {
             Ok(()) => return Ok(()),
@@ -254,6 +263,9 @@ fn watch(device: &Device, json: bool, config_path: &Path) -> Result<(), AppError
             return Err(err);
         }
 
+        if quit.requested() {
+            return Ok(());
+        }
         eprintln!("d3home: kettle went away ({err}); waiting for it to come back");
         // Finding 8: `connect_with` returns the `Cached` endpoint that
         // actually worked -- whether that was the one already cached or

@@ -6,6 +6,7 @@
 mod cli;
 mod commands;
 mod config;
+mod keys;
 mod output;
 mod progress;
 mod style;

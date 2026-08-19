@@ -11,7 +11,7 @@ use syncleo::client::DeviceState;
 use syncleo::codec::command::{Event, PowerMode, decode_diagnostic};
 use syncleo::discovery::Found;
 
-use crate::config::{Config, hex_encode};
+use crate::config::{Config, Device, hex_encode};
 use crate::style::Style;
 
 fn mode_str(mode: PowerMode) -> &'static str {
@@ -73,7 +73,7 @@ fn fmt_rich_temperature(t: Option<u8>, zero_is_none: bool) -> String {
 /// The status block a capable terminal gets: a heading naming the device
 /// and what it is doing, then the readings, indented so the eye can find
 /// the numbers without reading the labels.
-fn state_rich(state: &DeviceState, device: &str, style: Style) -> String {
+fn state_rich(state: &DeviceState, device: &Device, style: Style) -> String {
     let mode = state.mode.map(mode_str).unwrap_or("unknown");
     let dot = match state.mode {
         Some(PowerMode::Off) | None => style.dim("\u{25cf}"),
@@ -82,7 +82,13 @@ fn state_rich(state: &DeviceState, device: &str, style: Style) -> String {
     };
 
     let mut out = String::from("\n  ");
-    out.push_str(&style.bold(device));
+    out.push_str(&style.bold(&device.name));
+    // Model and driver, so a registry with several devices in it stays
+    // legible: which kettle is this, and what speaks to it.
+    if let Some(model) = &device.model {
+        out.push_str(&style.dim(&format!("  {model}")));
+    }
+    out.push_str(&style.dim(&format!("  [{}]", device.driver)));
     out.push_str("   ");
     out.push_str(&dot);
     out.push(' ');
@@ -106,15 +112,22 @@ fn state_rich(state: &DeviceState, device: &str, style: Style) -> String {
     ];
     for (label, value) in rows {
         // Pad before painting: escape sequences have no width on screen but
-        // every byte counts to `{:<14}`, so colouring first would push the
+        // every byte counts to `{:<21}`, so colouring first would push the
         // values out of line by exactly the length of the escape.
         out.push_str(&format!("  {}{}\n", style.dim(&format!("{label:<21}")), value));
+    }
+
+    if let Some(current) = state.current_temperature {
+        let heating = matches!(state.mode, Some(PowerMode::On) | Some(PowerMode::Custom));
+        out.push('\n');
+        out.push_str(&temperature_bar(current, state.target_temperature, heating, style));
+        out.push('\n');
     }
     out.pop();
     out
 }
 
-pub fn print_state(state: &DeviceState, device: &str, json: bool) {
+pub fn print_state(state: &DeviceState, device: &Device, json: bool) {
     if json {
         // `volume` (code 9) stays in the JSON form even though, on the
         // evidence gathered so far, it is useless: it read 0 on an empty
@@ -266,6 +279,44 @@ fn event_human(event: &Event) -> String {
 /// `Err` means the write failed (most commonly a broken pipe), and the
 /// caller decides what to do about it rather than this panicking on a
 /// downstream reader that has simply gone away.
+/// The temperature bar, shared by `watch` and `status`.
+///
+/// The scale is absolute, 0 to 100 °C, so a glance always means the same
+/// thing: the dots do not rescale when the target changes, and a kettle at
+/// 40 °C looks the same whether it is heading for 60 or for boiling.
+pub fn temperature_bar(current: u8, target: Option<u8>, heating: bool, style: Style) -> String {
+    const CELLS: usize = 25;
+    let cell_of = |t: u8| (usize::from(t) * CELLS).div_ceil(100).min(CELLS).saturating_sub(1);
+
+    let filled = cell_of(current);
+    let target_cell = target.map(cell_of);
+
+    let mut track = String::new();
+    for i in 0..CELLS {
+        if Some(i) == target_cell {
+            // The one thing worth finding at a glance.
+            track.push_str(&style.yellow("\u{25c9}"));
+        } else if i <= filled {
+            let dot = "\u{25cf}";
+            track.push_str(&if heating {
+                style.bright_green(dot)
+            } else {
+                // Idle, but the reading is still real -- bright enough to
+                // read as data rather than as disabled chrome.
+                style.bright_white(dot)
+            });
+        } else {
+            track.push_str(&style.dim("\u{00b7}"));
+        }
+    }
+
+    let mut out = format!("  {}  {track}", style.bold(&format!("{current} \u{00b0}C")));
+    if let Some(target) = target {
+        out.push_str(&format!("  {}", style.dim(&format!("{target} \u{00b0}C"))));
+    }
+    out
+}
+
 /// Renders a `watch` stream, keeping one live progress line at the bottom
 /// on a capable terminal.
 ///
@@ -374,38 +425,8 @@ impl WatchView {
         self.bar(current).unwrap_or_else(|| format!("  {reading}"))
     }
 
-    /// The scale is absolute, 0 to 100 °C, so a glance always means the same
-    /// thing: the dots do not rescale when the target changes, and a kettle
-    /// at 40 °C looks the same whether it is heading for 60 or for boiling.
     fn bar(&self, current: u8) -> Option<String> {
-        const CELLS: usize = 25;
-        let cell_of = |t: u8| (usize::from(t) * CELLS).div_ceil(100).min(CELLS).saturating_sub(1);
-
-        let filled = cell_of(current);
-        let target_cell = self.target.map(cell_of);
-
-        let mut track = String::new();
-        for i in 0..CELLS {
-            if Some(i) == target_cell {
-                // The one thing worth finding at a glance.
-                track.push_str(&self.style.yellow("\u{25c9}"));
-            } else if i <= filled {
-                let dot = "\u{25cf}";
-                track.push_str(&if self.heating {
-                    self.style.bright_green(dot)
-                } else {
-                    self.style.white(dot)
-                });
-            } else {
-                track.push_str(&self.style.dim("\u{00b7}"));
-            }
-        }
-
-        let mut out = format!("  {}  {track}", self.style.bold(&format!("{current} \u{00b0}C")));
-        if let Some(target) = self.target {
-            out.push_str(&format!("  {}", self.style.dim(&format!("{target} \u{00b0}C"))));
-        }
-        Some(out)
+        Some(temperature_bar(current, self.target, self.heating, self.style))
     }
 }
 
@@ -519,6 +540,18 @@ pub fn print_stopped(json: bool) {
 mod tests {
     use super::*;
 
+    fn sample_device() -> Device {
+        Device {
+            name: "kettle".into(),
+            aliases: Vec::new(),
+            driver: "syncleo".into(),
+            model: Some("PWK 1725CGLD".into()),
+            mac: "aabbccddeeff".into(),
+            token: "0123456789abcdef0123456789abcdef".into(),
+            cached: None,
+        }
+    }
+
     #[test]
     fn the_bar_is_on_screen_before_the_kettle_has_said_anything() {
         // Staring at a blank terminal until the device happens to speak is
@@ -560,7 +593,7 @@ mod tests {
         let cold = view_at(76, Some(100), false).bar(76).unwrap();
         assert_eq!(count(&hot, '\u{25cf}'), count(&cold, '\u{25cf}'));
         assert!(hot.contains("\u{1b}[92m"), "heating should be green: {hot:?}");
-        assert!(cold.contains("\u{1b}[37m"), "idle should be plain: {cold:?}");
+        assert!(cold.contains("\u{1b}[97m"), "idle should still read as data: {cold:?}");
         assert!(!cold.contains("\u{1b}[92m"));
     }
 
@@ -603,7 +636,7 @@ mod tests {
             error: Some(false),
             child_lock: Some(false),
         };
-        let block = state_rich(&state, "kettle", Style::Rich);
+        let block = state_rich(&state, &sample_device(), Style::Rich);
 
         // Only the reading rows, which begin with a dim label. The heading
         // also carries a dim escape (the status dot) and is not a column.
@@ -628,7 +661,7 @@ mod tests {
             error: Some(true),
             child_lock: Some(false),
         };
-        let block = state_rich(&state, "kettle", Style::Plain);
+        let block = state_rich(&state, &sample_device(), Style::Plain);
         assert!(!block.contains('\u{1b}'), "escape leaked into plain output: {block:?}");
         assert!(block.contains("78"), "the reading itself must survive: {block:?}");
     }
