@@ -14,9 +14,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Run on every platform the project claims to support, because both times
+  # this has been wrong the code compiled fine and failed when run: a test
+  # naming the loopback interface "lo", which is a Linux name, and a config
+  # path built from HOME, which Windows does not set. `cargo check` for a
+  # foreign target catches neither.
   test:
-    name: test and lint
-    runs-on: ubuntu-latest
+    name: test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -24,38 +33,35 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
-      # First, because it needs no build and a failure here is a one-command fix.
+      # First, because it needs no build and a failure here is a one-command
+      # fix. Formatting cannot differ by platform, so once is enough.
       - name: Formatting
+        if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all --check
 
       # --all-features builds the kettle simulator too, so the device side of
-      # the protocol is linted and exercised rather than only compiled locally.
+      # the protocol is exercised rather than only compiled.
       - name: Test
         run: cargo test --workspace --all-features
 
+      # On each platform, not just one: the lints that matter for a
+      # cfg-gated branch are the ones that only ever compile there.
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  # A release found that this had never compiled for Windows: the code called
-  # if_nametoindex, which POSIX has and Windows does not. `cargo check` needs
-  # no linker for a foreign target, so the whole class of mistake is caught
-  # here in seconds instead of on a release runner.
+  # The one target nothing above runs on: an Intel Mac. `cargo check` needs no
+  # linker for a foreign target, so this costs seconds and still catches code
+  # that could never compile there.
   cross:
-    name: compiles for ${{ matrix.target }}
+    name: compiles for x86_64-apple-darwin
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - x86_64-pc-windows-msvc
-          - aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-targets --all-features --target ${{ matrix.target }}
+      - run: cargo check --workspace --all-targets --all-features --target x86_64-apple-darwin
 
   msrv:
     name: minimum supported Rust (1.88)

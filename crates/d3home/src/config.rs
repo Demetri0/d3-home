@@ -456,16 +456,38 @@ impl Config {
     /// `$XDG_CONFIG_HOME/d3home/devices.toml`, falling back to
     /// `~/.config/d3home/devices.toml` when that variable is unset or empty.
     pub fn default_path() -> PathBuf {
-        let config_home = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| {
-                let home = std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_default();
-                home.join(".config")
-            });
-        config_home.join("d3home").join("devices.toml")
+        Self::path_under(&|name| std::env::var_os(name))
+    }
+
+    /// Where the registry lives, given a way to read the environment.
+    ///
+    /// The lookup is a parameter so both platforms' answers can be tested
+    /// from either one. Windows has neither of the variables the
+    /// freedesktop layout is built on: reading only those left the path
+    /// relative -- `.config\d3home\devices.toml` in whatever directory the
+    /// program happened to be started from, which is nobody's idea of where
+    /// their configuration lives.
+    fn path_under(env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
+        let non_empty = |name: &str| {
+            env(name)
+                .map(PathBuf::from)
+                .filter(|p| !p.as_os_str().is_empty())
+        };
+
+        // Roaming application data is where a Windows program keeps
+        // per-user configuration, and it follows the user between machines
+        // in a domain -- which is right for a list of devices and tokens.
+        let config_home = if cfg!(windows) {
+            non_empty("APPDATA")
+                .or_else(|| non_empty("USERPROFILE").map(|p| p.join("AppData").join("Roaming")))
+        } else {
+            non_empty("XDG_CONFIG_HOME").or_else(|| non_empty("HOME").map(|p| p.join(".config")))
+        };
+
+        config_home
+            .unwrap_or_default()
+            .join("d3home")
+            .join("devices.toml")
     }
 }
 
@@ -626,6 +648,75 @@ driver = "syncleo"
 mac = "deadbeefdead"
 token = "deadbeefdeadbeefdeadbeefdeadbeef"
 "#;
+
+    /// A stand-in environment, so both platforms' rules can be checked from
+    /// either one.
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> + use<> {
+        let pairs: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |name: &str| {
+            pairs
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| std::ffi::OsString::from(v))
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn the_registry_follows_the_freedesktop_layout() {
+        let path = Config::path_under(&env_of(&[("HOME", "/home/someone")]));
+        assert_eq!(
+            path,
+            PathBuf::from("/home/someone/.config/d3home/devices.toml")
+        );
+
+        // An explicit XDG_CONFIG_HOME wins, and an empty one is ignored
+        // rather than taken as "the current directory".
+        let path = Config::path_under(&env_of(&[
+            ("XDG_CONFIG_HOME", "/elsewhere"),
+            ("HOME", "/home/someone"),
+        ]));
+        assert_eq!(path, PathBuf::from("/elsewhere/d3home/devices.toml"));
+
+        let path = Config::path_under(&env_of(&[
+            ("XDG_CONFIG_HOME", ""),
+            ("HOME", "/home/someone"),
+        ]));
+        assert_eq!(
+            path,
+            PathBuf::from("/home/someone/.config/d3home/devices.toml")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_registry_lives_in_roaming_application_data_on_windows() {
+        // Reading HOME and XDG_CONFIG_HOME there found neither, and left the
+        // path relative to wherever the program was started from.
+        let path = Config::path_under(&env_of(&[("APPDATA", r"C:\Users\someone\AppData\Roaming")]));
+        assert_eq!(
+            path,
+            PathBuf::from(r"C:\Users\someone\AppData\Roaming\d3home\devices.toml")
+        );
+
+        let path = Config::path_under(&env_of(&[("USERPROFILE", r"C:\Users\someone")]));
+        assert_eq!(
+            path,
+            PathBuf::from(r"C:\Users\someone\AppData\Roaming\d3home\devices.toml")
+        );
+    }
+
+    #[test]
+    fn an_empty_environment_still_names_the_file_it_wants() {
+        // Nothing set anywhere is not a crash and not a panic: the name is
+        // still right, and the failure to find a home shows up as a plain
+        // "no device registry" a moment later.
+        let path = Config::path_under(&env_of(&[]));
+        assert!(path.ends_with("d3home/devices.toml") || path.ends_with(r"d3home\devices.toml"));
+    }
 
     #[test]
     fn a_device_registered_before_vendors_existed_still_loads() {

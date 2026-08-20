@@ -194,11 +194,21 @@ mod tests {
 
     #[test]
     fn a_link_local_ipv6_address_resolves_a_real_interface_to_its_index() {
-        // "lo" (the loopback interface) exists on every Linux box this
-        // runs on, sandboxed or not -- resolving its name to an index is a
-        // read of the kernel's interface table, not a network operation.
+        // Resolving a name to an index reads the interface table; it is not
+        // a network operation, so this runs in a sandbox. The name comes
+        // from the machine: it used to say "lo", which is what Linux calls
+        // the loopback and what macOS, the BSDs and Windows all call
+        // something else.
+        let interfaces = if_addrs::get_if_addrs().expect("a machine can list its own interfaces");
+        let interface = interfaces
+            .iter()
+            .find(|i| i.ip().is_loopback() && i.index.is_some())
+            .or_else(|| interfaces.iter().find(|i| i.index.is_some()))
+            .expect("at least one interface has an index");
+
         let link_local: Ipv6Addr = "fe80::1".parse().unwrap();
-        let addr = socket_addr(IpAddr::V6(link_local), 8888, Some("lo")).unwrap();
+        let addr = socket_addr(IpAddr::V6(link_local), 8888, Some(&interface.name))
+            .unwrap_or_else(|e| panic!("{} should resolve: {e:?}", interface.name));
         match addr {
             SocketAddr::V6(v6) => {
                 assert_eq!(*v6.ip(), link_local);

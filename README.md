@@ -137,12 +137,21 @@ If nothing is found, the usual culprit is a firewall dropping mDNS; see
 
 ## Configuration
 
-`~/.config/d3home/devices.toml`, mode `0600`. It holds the device token — the
-key to the kettle — so the file belongs neither in a repository nor in a backup
-somebody else can read. If it does end up readable by more than its owner
-(restored from a backup, copied with `cp` and no `-p`), `d3home` notices and
-warns on stderr the next time it loads the config. It still works: the warning
-is a nudge, not a refusal.
+| Platform | Where the registry lives |
+| --- | --- |
+| Linux, BSD | `$XDG_CONFIG_HOME/d3home/devices.toml`, or `~/.config/d3home/devices.toml` |
+| macOS | `~/.config/d3home/devices.toml` |
+| Windows | `%APPDATA%\d3home\devices.toml` |
+
+`--config <path>` overrides it anywhere.
+
+The file holds the device token — the key to the kettle — so it belongs neither
+in a repository nor in a backup somebody else can read. On Unix it is mode
+`0600` from the moment it is created, and if it ends up readable by more than
+its owner (restored from a backup, copied with `cp` and no `-p`), `d3home`
+notices and warns on stderr the next time it loads the config. It still works:
+the warning is a nudge, not a refusal. Windows has no such bit; there the file
+is protected by the access control list it inherits from your profile.
 
 ```toml
 [[devices]]
