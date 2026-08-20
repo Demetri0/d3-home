@@ -1,3 +1,5 @@
+<img src="assets/icons/d3home.png" alt="" width="96" align="right">
+
 # d3home
 
 A command line for the smart devices in your home. The first of them is a
