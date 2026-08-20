@@ -710,7 +710,18 @@ Issues and patches are welcome, particularly:
 
 `cargo test --workspace` and `cargo clippy --all-targets --workspace -- -D warnings`
 should both be clean, and `cargo fmt --all` should leave the tree unchanged —
-CI runs exactly those, plus a build against the declared minimum Rust. New behaviour comes with a test; the simulator in
+CI runs exactly those, plus a build against the declared minimum Rust and a
+`cargo check` for Windows and macOS, which needs no linker and catches code
+that could never have compiled there.
+
+Run clippy on **stable**, and check which toolchain you actually have:
+
+```bash
+cargo clippy --version          # CI uses whatever stable is on the day
+```
+
+A pinned older toolchain will pass a lint that CI then fails on, because each
+release adds lints. New behaviour comes with a test; the simulator in
 `crates/syncleo/src/simulator.rs` means you do not need a kettle to write one.
 
 ## Credit

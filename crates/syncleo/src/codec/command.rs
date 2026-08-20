@@ -231,8 +231,14 @@ pub fn decode_diagnostic(payload: &[u8]) -> Option<Vec<(String, u32)>> {
         return None;
     }
 
+    // The remainder is empty by the check above, so it is discarded here.
+    // `as_chunks` rather than `chunks_exact` because the size is a constant:
+    // each pair arrives as a fixed-size array instead of a slice that has to
+    // be re-checked for length further down.
+    let (pairs, _) = pairs.as_chunks::<PAIR_LEN>();
+
     pairs
-        .chunks_exact(PAIR_LEN)
+        .iter()
         .map(|pair| {
             let (tag, value) = pair.split_at(4);
             let tag = trim_trailing_nul(tag);
