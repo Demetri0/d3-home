@@ -13,6 +13,10 @@
 # a PATH.
 set -eu
 
+# Paths below are relative to the repository root, so start there whatever
+# directory this was called from.
+cd "$(dirname "$0")/../.."
+
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/d3home/Cargo.toml | head -1)
 BIN=${BIN:-target/release/d3home}
 OUT=${OUT:-dist}
