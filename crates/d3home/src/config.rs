@@ -575,6 +575,10 @@ fn warn_if_permissions_are_too_loose(_path: &Path) {}
 /// `mode`'s owner-only bits (`0600`) are already as tight as `save`
 /// produces. Kept pure and separate from the actual printing so it can be
 /// tested without capturing this process's own stderr.
+///
+/// A mode is a Unix idea, so on Windows nothing calls this and it is not
+/// compiled at all.
+#[cfg(unix)]
 fn loose_permission_warning(path: &Path, mode: u32) -> Option<String> {
     if mode & 0o077 == 0 {
         return None;
@@ -1274,6 +1278,7 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_world_or_group_readable_config_gets_a_warning() {
         let path = Path::new("devices.toml");
@@ -1283,6 +1288,7 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         assert!(loose_permission_warning(path, 0o666).is_some());
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_owner_only_config_gets_no_warning() {
         assert!(loose_permission_warning(Path::new("devices.toml"), 0o600).is_none());

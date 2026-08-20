@@ -49,6 +49,10 @@ impl Quit {
         self.0.load(Ordering::Relaxed)
     }
 
+    /// Only the key-reading thread asks, and that thread is POSIX. On
+    /// Windows nothing can request a stop, which is the truth of it: there
+    /// is no key reader there to press `q` at.
+    #[cfg(unix)]
     fn request(&self) {
         self.0.store(true, Ordering::Relaxed);
     }
@@ -150,11 +154,13 @@ impl Drop for QuitOnKey {
     }
 }
 
-#[cfg(test)]
+// Every test here is about a POSIX terminal: raw mode, and a flag that only
+// a key reader can set. Windows has neither, so the module is not compiled
+// there rather than left empty.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn without_a_terminal_nothing_is_touched_and_nothing_quits() {
         // Under a test harness stdin is not a tty, which is also the shape
