@@ -44,50 +44,24 @@ Working and in daily use, but young, and honest about its limits:
 
 ## Installing
 
-Every release publishes a package for each platform, with a `SHA256SUMS` file
-beside them.
+**Nothing is published anywhere yet.** No release has been tagged, so the
+packages below do not exist to download, and the project is in neither
+Homebrew nor winget nor the AUR nor crates.io. Building from source is the
+way in today; the rest of this section is what each channel will look like,
+and [Publishing](#publishing) is what it takes to open them.
 
-### Linux
+### From a release, once one is cut
+
+Each `v*` tag builds a package for every platform and attaches them to the
+GitHub release page, with a `SHA256SUMS` file beside them.
 
 ```bash
 sudo dpkg -i d3home_0.1.0_amd64.deb          # Debian, Ubuntu
 sudo rpm -i d3home-0.1.0-1.x86_64.rpm        # Fedora, openSUSE, RHEL
 ```
 
-On Arch, build from the AUR recipe in [`packaging/arch/`](packaging/arch/):
-
-```bash
-makepkg -si
-```
-
-### macOS
-
-```bash
-brew install d3home
-```
-
-For notifications that carry d3home's own icon, build the application bundle
-as well:
-
-```bash
-packaging/macos/bundle.sh                    # produces dist/d3home.app
-```
-
-macOS shows the icon of whichever application asked for the notification, and
-offers no way to choose one. Run from a terminal, every notification carries
-Terminal's icon; run from inside a bundle, it carries d3home's. The bundle is
-therefore not decoration — it is the only way, and the LaunchAgent in
-[`contrib/`](contrib/) should point at the binary inside it.
-
-### Windows
-
-```powershell
-winget install Demetri0.d3home
-```
-
-Or run the `.msi` from the release page. Either way `d3home` lands on `PATH`,
-and the icon travels inside the executable as a resource, which is how
-Windows carries one.
+On Windows, run the `.msi`: `d3home` lands on `PATH`, and the icon travels
+inside the executable as a resource, which is how Windows carries one.
 
 Windows support is new and two things are missing rather than broken. `q` does
 not stop a `watch` — reading a single key without waiting for Enter needs a
@@ -96,6 +70,19 @@ progress bar is not drawn, for the same reason the size of the window cannot be
 asked for. The device registry is protected by the access control list it
 inherits from your profile directory rather than by an owner-only mode bit,
 which is the platform's own answer and not ours.
+
+### macOS notifications
+
+macOS shows the icon of whichever application asked for the notification, and
+offers no way to choose one. Run from a terminal, every notification carries
+Terminal's icon; run from inside a bundle, it carries d3home's. So on that
+platform the bundle is not decoration — it is the only way:
+
+```bash
+packaging/macos/bundle.sh                    # produces dist/d3home.app
+```
+
+The LaunchAgent in [`contrib/`](contrib/) should point at the binary inside it.
 
 ### From source
 
@@ -680,6 +667,10 @@ One test is marked `#[ignore]` — it needs a real network with working multicas
 | macOS | Homebrew formula, `.app` | [`packaging/homebrew/`](packaging/homebrew/), [`packaging/macos/bundle.sh`](packaging/macos/bundle.sh) |
 | Windows | `.msi`, winget manifest | [`packaging/windows/`](packaging/windows/), [`packaging/winget/`](packaging/winget/) |
 
+Only the `.deb`, `.rpm`, `.msi` and the archives are built by the release
+workflow. The Homebrew formula, the winget manifests and the PKGBUILD are
+recipes for registries that live elsewhere — see [Publishing](#publishing).
+
 The `Makefile` is the single description of what gets installed where; the
 rpm and the PKGBUILD both call it rather than each listing the same files in
 a slightly different way. Debian's tooling cannot call a Makefile, so the
@@ -691,6 +682,33 @@ when a `v*` tag is pushed, each package on the platform whose tools it needs:
 a `.deb` wants dpkg, an `.msi` wants WiX on Windows, and an `.app` wants
 `iconutil` on a Mac. The same test suite runs on each of those machines
 before anything is uploaded.
+
+## Publishing
+
+Nothing reaches a package manager by being on GitHub. Each registry is a
+separate repository someone has to be let into, and the files in
+[`packaging/`](packaging/) are what goes there — written and ready, submitted
+nowhere.
+
+| Channel | What makes `install` work | Where the file already is |
+| --- | --- | --- |
+| GitHub release | push a `v*` tag; the workflow does the rest | — |
+| Homebrew | a tap: a repo named `Demetri0/homebrew-tap` holding `Formula/d3home.rb`, then `brew tap Demetri0/tap` | [`packaging/homebrew/d3home.rb`](packaging/homebrew/d3home.rb) |
+| winget | a pull request adding the three manifests to `microsoft/winget-pkgs` | [`packaging/winget/`](packaging/winget/) |
+| AUR | push the recipe to `ssh://aur@aur.archlinux.org/d3home.git` | [`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) |
+| crates.io | `cargo publish` for `syncleo`, then for `d3home` | — |
+
+Two of those have gatekeepers worth knowing about before trying. Homebrew's
+main repository, `homebrew-core`, only accepts projects that clear its
+notability bar — roughly, a following and a history — which a new project does
+not have; a tap needs nobody's permission and is the normal way to start.
+winget's manifests are reviewed, and validation will reject an installer whose
+`InstallerSha256` does not match the file at `InstallerUrl`, so that field is
+filled in from the release rather than guessed.
+
+Each of those files carries a version and, for winget, a checksum. They are
+not updated by the release workflow: a release that quietly rewrites somebody
+else's repository is a surprise, and these are somebody else's repositories.
 
 ## The protocol
 
