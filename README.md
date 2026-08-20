@@ -391,6 +391,21 @@ d3home: watching kettle via notify-send
 It says which notifier it chose at startup, because the alternative is
 wondering later why nothing appeared.
 
+A notification is headed with the model and the name you gave the device, and
+says what happened:
+
+```
+PWK 1725CGLD · kettle
+Heating complete
+```
+
+The vendor's app heads its own notifications with the model alone, which stops
+being useful the moment there are two of something. Devices with no `model` in
+the config are headed with their name by itself. The temperature is not
+repeated in the text — it reaches a custom command through
+`D3HOME_TEMPERATURE`, where a program can do something with it, rather than
+crowding a line meant for a person.
+
 ### Settings
 
 Every part is optional. A config with no `[daemon]` section watches every
@@ -448,8 +463,8 @@ string, so a device name or a body containing a quote cannot change what runs:
 | --- | --- |
 | `D3HOME_EVENT` | `boiled` |
 | `D3HOME_DEVICE` | `kettle` |
-| `D3HOME_TITLE` | `kettle` |
-| `D3HOME_BODY` | `boiled at 98 °C` |
+| `D3HOME_TITLE` | `PWK 1725CGLD · kettle` |
+| `D3HOME_BODY` | `Heating complete` |
 | `D3HOME_TEMPERATURE` | `98` |
 | `D3HOME_TARGET` | `100` |
 

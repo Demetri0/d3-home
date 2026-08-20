@@ -213,8 +213,8 @@ mod tests {
         Notification {
             event: "boiled",
             device: "kettle".into(),
-            title: "Kettle".into(),
-            body: "boiled at 98 \u{b0}C".into(),
+            title: "PWK 1725CGLD \u{b7} kettle".into(),
+            body: "Heating complete".into(),
             temperature: Some(98),
             target: Some(100),
         }
@@ -238,7 +238,14 @@ mod tests {
         ] {
             let command = backend_command(backend, &sample());
             let joined = args_of(&command).join(" ");
-            assert!(joined.contains("98"), "{backend:?} lost the body: {joined}");
+            assert!(
+                joined.contains("Heating complete"),
+                "{backend:?} lost the body: {joined}"
+            );
+            assert!(
+                joined.contains("PWK 1725CGLD"),
+                "{backend:?} lost the title: {joined}"
+            );
             assert_eq!(command.get_program(), backend.binary());
         }
     }

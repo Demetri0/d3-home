@@ -31,6 +31,12 @@ const REACHED_TOLERANCE: u8 = 2;
 /// about. Pure: no I/O, no clock, so every rule is testable instantly.
 pub struct Watcher {
     device: String,
+    /// What the notification is headed with: the model and the name the
+    /// device was given, so a popup names both the thing on the worktop and
+    /// the word you type at it. The vendor's app heads its notifications
+    /// with the model alone, which is no help at all once there are two of
+    /// something.
+    title: String,
     wanted: Vec<String>,
     heating: bool,
     current: Option<u8>,
@@ -43,9 +49,16 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    pub fn new(device: String, wanted: Vec<String>) -> Self {
+    pub fn new(device: String, model: Option<String>, wanted: Vec<String>) -> Self {
+        let title = match model {
+            // A middle dot rather than a dash: it separates without
+            // competing with either word for attention.
+            Some(model) => format!("{model} \u{b7} {device}"),
+            None => device.clone(),
+        };
         Self {
             device,
+            title,
             wanted,
             heating: false,
             current: None,
@@ -66,7 +79,7 @@ impl Watcher {
         Some(Notification {
             event,
             device: self.device.clone(),
-            title: self.device.clone(),
+            title: self.title.clone(),
             body,
             temperature: self.current,
             target: self.target,
@@ -88,7 +101,7 @@ impl Watcher {
                 match (previous, flag) {
                     // Only the transition into an error is news. A repeat is
                     // the same error; clearing it is not worth a popup.
-                    (Some(false), true) => self.make("error", "reports an error".into()),
+                    (Some(false), true) => self.make("error", "Device error".into()),
                     _ => None,
                 }
             }
@@ -106,24 +119,25 @@ impl Watcher {
 
                 if self.heating {
                     let body = match self.target {
-                        Some(target) => format!("heating to {target} \u{b0}C"),
-                        None => "heating".to_string(),
+                        Some(target) => format!("Heating to {target} \u{b0}C"),
+                        None => "Heating started".to_string(),
                     };
                     return self.make("started", body);
                 }
 
+                // Worded the way the vendor's app words it, in English. The
+                // reading is not repeated here -- it reaches a custom
+                // command through D3HOME_TEMPERATURE, where a program can
+                // use it, rather than crowding a line meant for a person.
                 match (self.current, self.target) {
                     // Saturating, because nothing stops a device from
                     // reporting a reading that would overflow the addition.
                     (Some(current), Some(target))
                         if current.saturating_add(REACHED_TOLERANCE) >= target =>
                     {
-                        self.make("boiled", format!("boiled at {current} \u{b0}C"))
+                        self.make("boiled", "Heating complete".into())
                     }
-                    (Some(current), _) => {
-                        self.make("stopped", format!("switched off at {current} \u{b0}C"))
-                    }
-                    _ => self.make("stopped", "switched off".into()),
+                    _ => self.make("stopped", "Heating stopped".into()),
                 }
             }
             _ => None,
@@ -131,14 +145,14 @@ impl Watcher {
     }
 
     pub fn disconnected(&mut self) -> Option<Notification> {
-        self.make("offline", "went away".into())
+        self.make("offline", "Disconnected".into())
     }
 
     pub fn reconnected(&mut self) -> Option<Notification> {
         // The device replays its state on a new connection, so the next
         // burst must not be mistaken for a series of changes.
         self.seen_mode = false;
-        self.make("online", "came back".into())
+        self.make("online", "Reconnected".into())
     }
 }
 
@@ -214,7 +228,7 @@ pub fn run(config: &Config, config_path: &Path) -> Result<(), AppError> {
         let notifier = notifier.clone();
         let config_path = config_path.to_path_buf();
         threads.push(std::thread::spawn(move || {
-            let watcher = Watcher::new(device.name.clone(), wanted);
+            let watcher = Watcher::new(device.name.clone(), device.model.clone(), wanted);
             let notifier_for_sink = notifier.clone();
             let mut sink = NotifySink::new(
                 watcher,
@@ -252,6 +266,7 @@ mod tests {
     fn watcher(wanted: &[&str]) -> Watcher {
         Watcher::new(
             "kettle".into(),
+            Some("PWK 1725CGLD".into()),
             wanted.iter().map(|s| s.to_string()).collect(),
         )
     }
@@ -269,7 +284,7 @@ mod tests {
         let delivered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = delivered.clone();
         let mut sink = NotifySink::new(
-            Watcher::new("kettle".into(), vec!["boiled".into()]),
+            Watcher::new("kettle".into(), None, vec!["boiled".into()]),
             Box::new(move |n: &Notification| seen.lock().unwrap().push(n.event)),
         );
 
@@ -287,7 +302,7 @@ mod tests {
         // Returning an error would stop `stream` and end the watch. Missing
         // a popup must not cost the connection.
         let mut sink = NotifySink::new(
-            Watcher::new("kettle".into(), vec!["boiled".into()]),
+            Watcher::new("kettle".into(), None, vec!["boiled".into()]),
             Box::new(|_: &Notification| {}),
         );
         assert!(sink.event(&Event::Ping).is_ok());
@@ -307,10 +322,31 @@ mod tests {
         assert_eq!(notification.event, "boiled");
         assert_eq!(notification.device, "kettle");
         assert_eq!(notification.temperature, Some(79));
-        assert!(
-            notification.body.contains("79"),
-            "the body should carry the reading"
+        assert_eq!(notification.body, "Heating complete");
+    }
+
+    #[test]
+    fn the_title_names_the_model_and_the_name_you_gave_it() {
+        // The vendor's app heads its notifications with the model alone,
+        // which stops helping the moment there are two of something.
+        let mut w = watcher(&["boiled"]);
+        heat_to(&mut w, 80, 79);
+        let notification = w.observe(&Event::Mode(PowerMode::Off)).expect("boiled");
+        assert_eq!(notification.title, "PWK 1725CGLD \u{b7} kettle");
+        assert_eq!(
+            notification.device, "kettle",
+            "the name alone, for a program"
         );
+    }
+
+    #[test]
+    fn a_device_with_no_model_is_headed_with_its_name_alone() {
+        // `model` is optional in the config, and a title ending in a
+        // dangling separator would look broken.
+        let mut w = Watcher::new("kettle".into(), None, vec!["boiled".into()]);
+        heat_to(&mut w, 80, 79);
+        let notification = w.observe(&Event::Mode(PowerMode::Off)).expect("boiled");
+        assert_eq!(notification.title, "kettle");
     }
 
     #[test]
@@ -485,7 +521,7 @@ mod tests {
         let delivered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = delivered.clone();
         let mut sink = NotifySink::new(
-            Watcher::new("kettle".into(), vec!["offline".into()]),
+            Watcher::new("kettle".into(), None, vec!["offline".into()]),
             Box::new(move |n: &Notification| seen.lock().unwrap().push(n.event)),
         );
 
