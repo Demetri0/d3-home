@@ -71,19 +71,43 @@ pub struct Notification {
     pub body: String,
     pub temperature: Option<u8>,
     pub target: Option<u8>,
+    /// A name from the icon theme, or a path. A name is the better answer,
+    /// and the reason the packaging installs into `hicolor`: it survives the
+    /// file being moved and it follows whatever theme the user has chosen.
+    /// An unknown name costs nothing -- the notification simply arrives
+    /// without a picture.
+    pub icon: Option<String>,
 }
+
+/// The application name notifications are sent under, matching the
+/// `d3home.desktop` the packaging installs. A desktop uses it to tie the
+/// popup to an application, and through that to an icon.
+const APP_ID: &str = "d3home";
 
 /// Build the command for a built-in backend, without running it.
 pub fn backend_command(backend: Backend, n: &Notification) -> Command {
     let mut command = Command::new(backend.binary());
     match backend {
         Backend::NotifySend => {
+            command.args(["--app-name", APP_ID]);
+            // How a freedesktop notification is tied to an installed
+            // application, and the reason `d3home.desktop` exists at all.
+            command.args(["--hint", &format!("string:desktop-entry:{APP_ID}")]);
+            if let Some(icon) = &n.icon {
+                command.args(["-i", icon]);
+            }
             command.args([n.title.as_str(), n.body.as_str()]);
         }
         Backend::KdialogPassive => {
+            if let Some(icon) = &n.icon {
+                command.args(["--icon", icon]);
+            }
             command.args(["--title", &n.title, "--passivepopup", &n.body, "10"]);
         }
         Backend::Zenity => {
+            if let Some(icon) = &n.icon {
+                command.args([format!("--icon={icon}")]);
+            }
             command.args(["--notification", &format!("--text={}: {}", n.title, n.body)]);
         }
         Backend::Osascript => {
@@ -138,11 +162,18 @@ fn quote_applescript(text: &str) -> String {
 fn powershell_toast(n: &Notification) -> String {
     // The body goes through a PowerShell single-quoted string, where the
     // only escape needed is a doubled quote.
+    //
+    // Windows takes its icon from the executable's own resources, where the
+    // build script puts it -- that platform has neither an icon theme to
+    // name nor a convention of a file beside the binary. The fallback
+    // covers a build with no resource compiled in.
     let escape = |s: &str| s.replace('\'', "''");
     format!(
         "[reflection.assembly]::LoadWithPartialName('System.Windows.Forms') > $null; \
          $b = New-Object System.Windows.Forms.NotifyIcon; \
-         $b.Icon = [System.Drawing.SystemIcons]::Information; \
+         $b.Icon = try {{ \
+             [System.Drawing.Icon]::ExtractAssociatedIcon((Get-Process -id $pid).Path) \
+         }} catch {{ [System.Drawing.SystemIcons]::Information }}; \
          $b.Visible = $true; \
          $b.ShowBalloonTip(10000, '{}', '{}', 'Info')",
         escape(&n.title),
@@ -217,6 +248,7 @@ mod tests {
             body: "Heating complete".into(),
             temperature: Some(98),
             target: Some(100),
+            icon: Some("d3home".into()),
         }
     }
 
@@ -248,6 +280,49 @@ mod tests {
             );
             assert_eq!(command.get_program(), backend.binary());
         }
+    }
+
+    #[test]
+    fn a_backend_that_can_show_an_icon_is_given_one() {
+        for backend in [
+            Backend::NotifySend,
+            Backend::KdialogPassive,
+            Backend::Zenity,
+        ] {
+            let joined = args_of(&backend_command(backend, &sample())).join(" ");
+            assert!(
+                joined.contains("d3home"),
+                "{backend:?} dropped the icon: {joined}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_icon_configured_means_no_icon_argument() {
+        // An empty `-i` would be worse than none: notify-send would take the
+        // title as the icon name and lose it from the notification.
+        let mut n = sample();
+        n.icon = None;
+        let joined = args_of(&backend_command(Backend::NotifySend, &n)).join(" ");
+        assert!(
+            !joined.contains(" -i "),
+            "an icon flag appeared without an icon: {joined}"
+        );
+        assert!(
+            joined.contains("Heating complete"),
+            "the body went missing: {joined}"
+        );
+    }
+
+    #[test]
+    fn a_freedesktop_notification_names_the_application_it_came_from() {
+        // The desktop-entry hint ties the popup to the installed
+        // d3home.desktop, and through it to the icon theme.
+        let joined = args_of(&backend_command(Backend::NotifySend, &sample())).join(" ");
+        assert!(
+            joined.contains("string:desktop-entry:d3home"),
+            "no desktop-entry hint: {joined}"
+        );
     }
 
     #[test]

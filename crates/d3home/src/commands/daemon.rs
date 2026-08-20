@@ -37,6 +37,9 @@ pub struct Watcher {
     /// with the model alone, which is no help at all once there are two of
     /// something.
     title: String,
+    /// Passed straight through to the notification. Resolved once, by
+    /// `run`, rather than worked out again for every popup.
+    icon: Option<String>,
     wanted: Vec<String>,
     heating: bool,
     current: Option<u8>,
@@ -49,7 +52,12 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    pub fn new(device: String, model: Option<String>, wanted: Vec<String>) -> Self {
+    pub fn new(
+        device: String,
+        model: Option<String>,
+        icon: Option<String>,
+        wanted: Vec<String>,
+    ) -> Self {
         let title = match model {
             // A middle dot rather than a dash: it separates without
             // competing with either word for attention.
@@ -59,6 +67,7 @@ impl Watcher {
         Self {
             device,
             title,
+            icon,
             wanted,
             heating: false,
             current: None,
@@ -83,6 +92,7 @@ impl Watcher {
             body,
             temperature: self.current,
             target: self.target,
+            icon: self.icon.clone(),
         })
     }
 
@@ -193,9 +203,28 @@ impl EventSink for NotifySink {
     }
 }
 
+/// Which icon a device's notifications carry: its own, else the one set for
+/// the daemon, else the name the packaging installs into the icon theme.
+///
+/// A name rather than a path, because a name is what survives the file being
+/// moved and what follows the user's chosen theme. When nothing is installed
+/// the name resolves to nothing and the notification simply has no picture,
+/// which is not worth guarding against.
+fn icon_for(device: &crate::config::Device, fallback: Option<&str>) -> Option<String> {
+    device
+        .icon
+        .clone()
+        .or_else(|| fallback.map(str::to_string))
+        .or_else(|| Some(APP_ICON.to_string()))
+}
+
+/// The icon name `packaging/` installs into `hicolor`.
+const APP_ICON: &str = "d3home";
+
 /// Watch every configured device until stopped.
 pub fn run(config: &Config, config_path: &Path) -> Result<(), AppError> {
     let wanted: Vec<String> = config.daemon.notify.on.clone();
+    let notify_icon = config.daemon.notify.icon.clone();
     let notifier = std::sync::Arc::new(Notifier::new(config.daemon.notify.command.clone()));
 
     let devices: Vec<_> = match &config.daemon.devices {
@@ -227,8 +256,11 @@ pub fn run(config: &Config, config_path: &Path) -> Result<(), AppError> {
         let wanted = wanted.clone();
         let notifier = notifier.clone();
         let config_path = config_path.to_path_buf();
+        // Resolved out here, where the fallback can still be borrowed: each
+        // thread takes its own answer with it.
+        let icon = icon_for(&device, notify_icon.as_deref());
         threads.push(std::thread::spawn(move || {
-            let watcher = Watcher::new(device.name.clone(), device.model.clone(), wanted);
+            let watcher = Watcher::new(device.name.clone(), device.model.clone(), icon, wanted);
             let notifier_for_sink = notifier.clone();
             let mut sink = NotifySink::new(
                 watcher,
@@ -267,6 +299,7 @@ mod tests {
         Watcher::new(
             "kettle".into(),
             Some("PWK 1725CGLD".into()),
+            Some("d3home".into()),
             wanted.iter().map(|s| s.to_string()).collect(),
         )
     }
@@ -284,7 +317,7 @@ mod tests {
         let delivered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = delivered.clone();
         let mut sink = NotifySink::new(
-            Watcher::new("kettle".into(), None, vec!["boiled".into()]),
+            Watcher::new("kettle".into(), None, None, vec!["boiled".into()]),
             Box::new(move |n: &Notification| seen.lock().unwrap().push(n.event)),
         );
 
@@ -302,7 +335,7 @@ mod tests {
         // Returning an error would stop `stream` and end the watch. Missing
         // a popup must not cost the connection.
         let mut sink = NotifySink::new(
-            Watcher::new("kettle".into(), None, vec!["boiled".into()]),
+            Watcher::new("kettle".into(), None, None, vec!["boiled".into()]),
             Box::new(|_: &Notification| {}),
         );
         assert!(sink.event(&Event::Ping).is_ok());
@@ -343,7 +376,7 @@ mod tests {
     fn a_device_with_no_model_is_headed_with_its_name_alone() {
         // `model` is optional in the config, and a title ending in a
         // dangling separator would look broken.
-        let mut w = Watcher::new("kettle".into(), None, vec!["boiled".into()]);
+        let mut w = Watcher::new("kettle".into(), None, None, vec!["boiled".into()]);
         heat_to(&mut w, 80, 79);
         let notification = w.observe(&Event::Mode(PowerMode::Off)).expect("boiled");
         assert_eq!(notification.title, "kettle");
@@ -521,7 +554,7 @@ mod tests {
         let delivered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = delivered.clone();
         let mut sink = NotifySink::new(
-            Watcher::new("kettle".into(), None, vec!["offline".into()]),
+            Watcher::new("kettle".into(), None, None, vec!["offline".into()]),
             Box::new(move |n: &Notification| seen.lock().unwrap().push(n.event)),
         );
 

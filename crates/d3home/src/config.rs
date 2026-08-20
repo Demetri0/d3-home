@@ -123,6 +123,9 @@ pub struct NotifyConfig {
     /// A command to run instead of the built-in notifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// The icon every notification carries, unless a device names its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 impl Default for NotifyConfig {
@@ -130,6 +133,7 @@ impl Default for NotifyConfig {
         Self {
             on: default_events(),
             command: None,
+            icon: None,
         }
     }
 }
@@ -153,6 +157,10 @@ pub struct Device {
     /// written before this existed round-trips unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vendor: Option<String>,
+    /// The icon its notifications carry: a name from the icon theme, or a
+    /// path. Unset means the one set for the daemon, else d3home's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub mac: String,
     pub token: String,
     pub cached: Option<Cached>,

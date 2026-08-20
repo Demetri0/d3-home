@@ -884,6 +884,7 @@ mod tests {
             driver: "syncleo".into(),
             model: Some("PWK 1725CGLD".into()),
             vendor: Some("polaris".into()),
+            icon: None,
             mac: "deadbeefdead".into(),
             token: "deadbeefdeadbeefdeadbeefdeadbeef".into(),
             cached: None,

@@ -250,6 +250,7 @@ pub fn resolve(request: AddRequest, prompt: bool) -> Result<Device, AppError> {
         driver: "syncleo".into(),
         model: request.model,
         vendor: request.vendor,
+        icon: None,
         mac,
         token,
         cached: None,

@@ -1,0 +1,155 @@
+.TH D3HOME 1 "2026-08-20" "d3home 0.1.0" "User Commands"
+.SH NAME
+d3home \- control smart home devices over the local network
+.SH SYNOPSIS
+.B d3home
+.RI < device-or-alias >
+.RI < action >
+.RI [ args ...]
+.br
+.B d3home
+.RI < builtin >
+.RI [ args ...]
+.SH DESCRIPTION
+.B d3home
+speaks to smart home devices directly on the local network, without a cloud
+account and without the vendor's application. The first word of a command is
+a device name, or any alias given to it in the configuration, so
+.B d3home k start 80
+works once
+.B k
+is an alias.
+.PP
+Devices are found over mDNS and addressed over UDP. Nothing leaves the local
+network.
+.SH KETTLE ACTIONS
+.TP
+.B status
+Show mode, current and target temperature, and the error flag.
+.TP
+.B start ", " on
+Heat to 100 degrees Celsius.
+.TP
+.BI start " temp"
+Heat to
+.I temp
+degrees Celsius.
+.TP
+.BI set " temp"
+Set the target without starting, or retarget a heat already running.
+.TP
+.B off ", " stop
+Stop heating.
+.TP
+.B watch
+Stream events until
+.B q
+or Ctrl-C. Reconnects by itself when the kettle is put back on its base.
+.TP
+.B trace
+Every report the device makes, with protocol codes. For taking the protocol
+apart rather than for daily use.
+.SH BUILTIN COMMANDS
+.TP
+.BI add " [link]"
+Register a device: paste the share link from the vendor application, answer
+the prompts, or pass
+.BR \-\-name ", " \-\-mac ", " \-\-token ", " \-\-model " and " \-\-vendor .
+.TP
+.B daemon
+Watch the configured devices and send a notification when something happens.
+Runs in the foreground and does not fork; see
+.B FILES
+for the supervisor units.
+.TP
+.B discover
+Find devices on the local network.
+.TP
+.B devices
+List what is configured.
+.TP
+.BI "alias add" " alias device"
+Give
+.I device
+the alias
+.IR alias .
+.TP
+.BI "alias rm" " alias"
+Remove
+.IR alias .
+.TP
+.BI completions " shell"
+Print a completion script for bash, zsh or fish.
+.TP
+.B help
+Print the built-in help.
+.SH OPTIONS
+Options are accepted anywhere on the command line: before the device word,
+after the action, or after the action's own arguments.
+.TP
+.B \-\-json
+Machine-readable output. Errors honour it too.
+.TP
+.BI \-\-device " name"
+Act on
+.IR name ,
+instead of taking the device from the first word.
+.TP
+.BI \-\-config " path"
+Use
+.I path
+as the device registry.
+.TP
+.BR \-h ", " \-\-help
+Print the built-in help and exit.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Internal error: a bug, or a filesystem failure.
+.TP
+.B 2
+Usage or configuration error.
+.TP
+.B 3
+The device was not found on the network.
+.TP
+.B 4
+The device rejected the token.
+.TP
+.B 5
+The device did not answer in time.
+.TP
+.B 6
+The device reported an error of its own.
+.SH FILES
+.TP
+.I ~/.config/d3home/devices.toml
+The device registry, holding one entry per device with its token. Created by
+.B d3home add
+with owner-only permissions.
+.TP
+.I /usr/share/doc/d3home/contrib/
+Example supervisor units: a systemd user unit, a macOS LaunchAgent and a
+Windows scheduled task, all of which run the daemon in the logged-in user's
+session.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+Set to any value to suppress colour. Colour is also suppressed automatically
+when the output is not a terminal.
+.SH NOTES
+The device holds a single token, which is also what the vendor's application
+uses. Registering d3home does not revoke it, and the application keeps
+working.
+.SH SEE ALSO
+The protocol is documented in
+.I /usr/share/doc/d3home/protocol.md
+and at
+.UR https://github.com/Demetri0/d3-home
+.UE .

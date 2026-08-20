@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=d3home
+GenericName=Smart home device control
+Comment=Control smart home devices over the local network
+Exec=d3home
+Icon=d3home
+Terminal=true
+Categories=Utility;ConsoleOnly;
+Keywords=kettle;smarthome;iot;
+# A command line tool has no business in an application menu. The entry
+# exists so a notification can name it through the desktop-entry hint, which
+# is how a desktop ties a popup to an icon and an application.
+NoDisplay=true
