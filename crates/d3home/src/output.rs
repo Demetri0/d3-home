@@ -596,6 +596,7 @@ pub fn print_devices(config: &Config, json: bool) {
                     "name": d.name,
                     "aliases": d.aliases,
                     "driver": d.driver,
+                    "vendor": d.vendor,
                     "model": d.model,
                     "mac": d.mac,
                     "endpoint": d.cached.as_ref().map(|c| format!("{}:{}", c.address, c.port)),
@@ -623,6 +624,10 @@ pub fn print_devices(config: &Config, json: bool) {
         println!("  {heading}");
 
         let rows = [
+            (
+                "vendor",
+                device.vendor.clone().unwrap_or_else(|| "unknown".into()),
+            ),
             (
                 "model",
                 device.model.clone().unwrap_or_else(|| "unknown".into()),
@@ -878,6 +883,7 @@ mod tests {
             aliases: Vec::new(),
             driver: "syncleo".into(),
             model: Some("PWK 1725CGLD".into()),
+            vendor: Some("polaris".into()),
             mac: "deadbeefdead".into(),
             token: "deadbeefdeadbeefdeadbeefdeadbeef".into(),
             cached: None,

@@ -82,6 +82,7 @@ is a nudge, not a refusal.
 name    = "kettle"
 aliases = ["k", "чайник"]
 driver  = "syncleo"
+vendor  = "polaris"
 model   = "PWK 1725CGLD"
 mac     = "deadbeefdead"
 token   = "..."
@@ -93,6 +94,12 @@ port       = 41122
 public_key = "..."
 # interface = "enp8s0"   # only needed when address is a link-local IPv6 (fe80::/10)
 ```
+
+`vendor` and `model` both come from the share link and are optional; a device
+registered without them simply has neither. The protocol says nothing about
+either: mDNS advertises `_syncleo._udp`, and Syncleo is the platform a brand
+builds on rather than the brand itself, so the link is the only place the name
+appears at all. `--vendor` sets it by hand, and outranks what the link says.
 
 The kettle may advertise itself over IPv4 or as a link-local IPv6 address of the
 `fe80::…` form. You cannot connect to one of those without naming an interface,
@@ -364,6 +371,7 @@ NO_COLOR=1 d3home kettle status
 $ d3home devices
 
   kettle  (k, чайник)
+  vendor    polaris
   model     PWK 1725CGLD
   driver    syncleo
   mac       de:ad:be:ef:de:ad

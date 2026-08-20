@@ -26,6 +26,12 @@ pub struct ShareLink {
     pub mac: String,
     pub token: String,
     pub model: Option<String>,
+    /// Who made it, taken from the segment after `device-share`. The
+    /// protocol never says: mDNS advertises `_syncleo._udp`, and Syncleo is
+    /// the platform a brand builds on rather than the brand itself. The
+    /// link is the one place the name appears at all, so it is kept rather
+    /// than thrown away and guessed at later from a model prefix.
+    pub vendor: Option<String>,
 }
 
 /// Pull the device out of a share link.
@@ -49,6 +55,16 @@ pub fn parse_share_link(input: &str) -> Result<ShareLink, AppError> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| bad("no device address in the path"))?;
 
+    // `/device-share/polaris/57/deadbeefdead` -- the vendor follows the
+    // marker. What the number between them means is not known; it looks
+    // like a model id in the vendor's own catalogue.
+    let mut segments = path.split('/');
+    let vendor = segments
+        .find(|segment| *segment == "device-share")
+        .and_then(|_| segments.next())
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string);
+
     let mut token = None;
     let mut model = None;
     for pair in query.split('&') {
@@ -66,6 +82,7 @@ pub fn parse_share_link(input: &str) -> Result<ShareLink, AppError> {
         mac: mac.to_string(),
         token,
         model,
+        vendor,
     })
 }
 
@@ -104,6 +121,7 @@ pub struct AddRequest {
     pub mac: Option<String>,
     pub token: Option<String>,
     pub model: Option<String>,
+    pub vendor: Option<String>,
 }
 
 /// Interpret `add`'s own words. A bare positional that contains `://` is a
@@ -123,6 +141,7 @@ pub fn parse_args(args: &[String]) -> Result<AddRequest, AppError> {
             "--mac" => request.mac = Some(value("--mac")?),
             "--token" => request.token = Some(value("--token")?),
             "--model" => request.model = Some(value("--model")?),
+            "--vendor" => request.vendor = Some(value("--vendor")?),
             "--url" => apply_link(&mut request, &value("--url")?)?,
             other if other.contains("://") => apply_link(&mut request, other)?,
             other if other.starts_with('-') => {
@@ -141,6 +160,9 @@ fn apply_link(request: &mut AddRequest, url: &str) -> Result<(), AppError> {
     request.token = Some(link.token);
     if request.model.is_none() {
         request.model = link.model;
+    }
+    if request.vendor.is_none() {
+        request.vendor = link.vendor;
     }
     Ok(())
 }
@@ -227,6 +249,7 @@ pub fn resolve(request: AddRequest, prompt: bool) -> Result<Device, AppError> {
         aliases: Vec::new(),
         driver: "syncleo".into(),
         model: request.model,
+        vendor: request.vendor,
         mac,
         token,
         cached: None,
@@ -303,6 +326,42 @@ mod tests {
         assert_eq!(link.mac, "deadbeefdead");
         assert_eq!(link.token, "deadbeefdeadbeefdeadbeefdeadbeef");
         assert_eq!(link.model.as_deref(), Some("PWK 1725CGLD"));
+    }
+
+    #[test]
+    fn a_share_link_names_who_made_the_device() {
+        // The protocol never says -- mDNS advertises `_syncleo._udp`, and
+        // Syncleo is the platform, not the brand. The link is the only
+        // place the name appears, and it used to be thrown away.
+        assert_eq!(
+            parse_share_link(LINK).unwrap().vendor.as_deref(),
+            Some("polaris")
+        );
+    }
+
+    #[test]
+    fn a_link_of_another_shape_leaves_the_vendor_unknown() {
+        // Better unknown than guessed: a wrong vendor would pick a wrong
+        // icon and put another company's name on somebody's kettle.
+        let link = parse_share_link(
+            "https://example.com/deadbeefdead?token=deadbeefdeadbeefdeadbeefdeadbeef",
+        )
+        .unwrap();
+        assert_eq!(link.vendor, None);
+        assert_eq!(link.mac, "deadbeefdead");
+    }
+
+    #[test]
+    fn an_explicit_vendor_outranks_the_one_in_the_link() {
+        let args = [
+            "--vendor".to_string(),
+            "Polaris".to_string(),
+            LINK.to_string(),
+        ];
+        assert_eq!(
+            parse_args(&args).unwrap().vendor.as_deref(),
+            Some("Polaris")
+        );
     }
 
     #[test]

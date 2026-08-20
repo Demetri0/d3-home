@@ -148,6 +148,11 @@ pub struct Device {
     pub aliases: Vec<String>,
     pub driver: String,
     pub model: Option<String>,
+    /// Who made it, when it is known -- taken from the share link, since the
+    /// protocol itself never says. Skipped on save when absent so a config
+    /// written before this existed round-trips unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
     pub mac: String,
     pub token: String,
     pub cached: Option<Cached>,
@@ -595,6 +600,38 @@ driver = "syncleo"
 mac = "deadbeefdead"
 token = "deadbeefdeadbeefdeadbeefdeadbeef"
 "#;
+
+    #[test]
+    fn a_device_registered_before_vendors_existed_still_loads() {
+        // KETTLE has no `vendor` line, which is every config written so far.
+        let config = parse(KETTLE).unwrap();
+        assert!(config.resolve("kettle").unwrap().vendor.is_none());
+    }
+
+    #[test]
+    fn a_device_with_no_vendor_does_not_grow_an_empty_one_when_saved() {
+        let config = parse(KETTLE).unwrap();
+        let written = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            !written.contains("vendor"),
+            "an absent vendor leaked into the file: {written}"
+        );
+    }
+
+    #[test]
+    fn a_vendor_survives_a_round_trip() {
+        let toml_text = format!("{KETTLE}vendor = \"polaris\"\n");
+        let config = parse(&toml_text).unwrap();
+        assert_eq!(
+            config.resolve("kettle").unwrap().vendor.as_deref(),
+            Some("polaris")
+        );
+        let written = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            written.contains("polaris"),
+            "the vendor was dropped: {written}"
+        );
+    }
 
     #[test]
     fn a_config_without_a_daemon_section_still_has_defaults() {
