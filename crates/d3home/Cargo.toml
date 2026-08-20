@@ -27,6 +27,10 @@ winresource = "0.1"
 
 [dev-dependencies]
 assert_cmd = "2.0"
+# Tests ask the machine which interfaces it has rather than naming one: the
+# loopback is `lo` on Linux and `lo0` on macOS, and a hardcoded name passed
+# for months before failing on the first Mac that ran it.
+if-addrs = "0.15.0"
 predicates = "3.1"
 serde_json = "1.0"
 syncleo = { path = "../syncleo", features = ["simulator"] }

@@ -2,6 +2,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 mod support {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
@@ -73,6 +74,7 @@ public_key = "{public_key}"
         // would otherwise spuriously trip the world-readable-config
         // warning `Config::load` prints (finding 18) in every test in this
         // file, including the ones that assert a clean stderr.
+        #[cfg(unix)]
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         path
     }
@@ -726,6 +728,9 @@ fn json_status_output_still_carries_volume() {
     handle.shutdown();
 }
 
+// Mode bits, and nothing else: Windows protects the file by the access
+// control list it inherits instead, and has nothing here to warn about.
+#[cfg(unix)]
 #[test]
 fn a_world_readable_config_prints_a_warning_but_still_works() {
     // Finding 18: `save` is careful about 0600 from creation; `load`
@@ -1070,18 +1075,23 @@ fn add_creates_the_registry_when_there_is_none_yet() {
         .success()
         .stdout(predicate::str::contains("kettle"));
 
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o600, "the registry holds a token");
-    let dir_mode = std::fs::metadata(path.parent().unwrap())
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(
-        dir_mode & 0o777,
-        0o700,
-        "so should the directory we created for it"
-    );
+    // The registry is created everywhere; only the bits it is created with
+    // are a Unix idea.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "the registry holds a token");
+        let dir_mode = std::fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            dir_mode & 0o777,
+            0o700,
+            "so should the directory we created for it"
+        );
+    }
 
     // And it is immediately usable, with the model carried over from the link.
     Command::cargo_bin("d3home")
@@ -1225,6 +1235,9 @@ fn without_json_a_failure_stays_a_plain_sentence() {
     handle.shutdown();
 }
 
+// The warning this leans on to produce a second stderr line is about mode
+// bits, which Windows does not have.
+#[cfg(unix)]
 #[test]
 fn under_json_every_stderr_line_is_json_too() {
     // A promise kept only for errors is worse than no promise: a script that
@@ -1467,6 +1480,10 @@ fn help_and_completion_both_know_about_the_daemon() {
         .stdout(predicate::str::contains("daemon"));
 }
 
+// The witness is written by a shell command in sh syntax, which is not
+// what `cmd /C` would make of it. The daemon itself is not Unix-only; this
+// way of watching it work is.
+#[cfg(unix)]
 #[test]
 fn the_daemon_notifies_once_when_the_simulated_kettle_boils() {
     // The custom-command route is the only one testable without a desktop:

@@ -1264,14 +1264,26 @@ mod tests {
 
     #[test]
     fn a_cached_link_local_address_with_an_interface_resolves_to_a_scoped_socket_addr() {
+        // The interface name comes from the machine rather than from this
+        // file. It used to say "lo", which is the loopback on Linux and
+        // nowhere else: macOS and the BSDs call it "lo0", and the test
+        // passed for months before failing on the first Mac that ran it.
+        let interfaces = if_addrs::get_if_addrs().expect("a machine can list its own interfaces");
+        let interface = interfaces
+            .iter()
+            .find(|i| i.ip().is_loopback() && i.index.is_some())
+            .or_else(|| interfaces.iter().find(|i| i.index.is_some()))
+            .expect("at least one interface has an index");
+
         let cached = Cached {
             address: "fe80::dead:beef:dead:beef".parse().unwrap(),
             port: 8888,
             public_key: "ab".repeat(32),
-            interface: Some("lo".into()),
+            interface: Some(interface.name.clone()),
         };
 
-        let addr = cached_socket_addr(&cached, "kettle").expect("lo always resolves");
+        let addr = cached_socket_addr(&cached, "kettle")
+            .unwrap_or_else(|e| panic!("{} should resolve: {e:?}", interface.name));
         assert!(matches!(addr, SocketAddr::V6(_)));
     }
 

@@ -198,6 +198,7 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "dialoguer",
+ "if-addrs",
  "libc",
  "predicates",
  "rand",
@@ -820,7 +821,7 @@ dependencies = [
  "aes",
  "cbc",
  "cipher",
- "libc",
+ "if-addrs",
  "mdns-sd",
  "proptest",
  "sha2",

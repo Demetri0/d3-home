@@ -4,18 +4,29 @@
 //! Reading a single `q` needs the terminal in non-canonical mode, which is a
 //! change to shared state that must be undone on every exit path -- including
 //! the one where a signal kills the process before any destructor runs.
+//!
+//! All of that is POSIX. Windows reaches the same end through an entirely
+//! different console API, which this project does not link, so there `q` does
+//! nothing and Ctrl-C remains the way to stop -- unchanged, since it was
+//! never this module's doing.
 
-use std::io::{IsTerminal, Read};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(unix)]
+use std::io::{IsTerminal, Read};
+#[cfg(unix)]
+use std::sync::atomic::AtomicPtr;
 
 /// The terminal settings as we found them, kept where a signal handler can
 /// reach them. A handler may not lock or allocate, so this is a raw pointer
 /// to a leaked `termios` rather than anything friendlier.
+#[cfg(unix)]
 static ORIGINAL: AtomicPtr<libc::termios> = AtomicPtr::new(std::ptr::null_mut());
 
 /// Restore the terminal. Safe to call from a signal handler: one syscall,
 /// no allocation, no locks.
+#[cfg(unix)]
 extern "C" fn restore_and_die(signal: i32) {
     let saved = ORIGINAL.load(Ordering::SeqCst);
     if !saved.is_null() {
@@ -52,12 +63,14 @@ impl Quit {
 /// this tool broke the habit.
 pub struct QuitOnKey {
     quit: Quit,
+    #[cfg(unix)]
     restore: Option<libc::termios>,
 }
 
 impl QuitOnKey {
     /// Start watching. Without a terminal there is nobody to press a key, so
     /// this does nothing at all and leaves the process untouched.
+    #[cfg(unix)]
     pub fn start() -> Self {
         let quit = Quit::default();
         if !std::io::stdin().is_terminal() {
@@ -113,11 +126,22 @@ impl QuitOnKey {
         }
     }
 
+    /// Nothing to start: reading one key without waiting for Enter needs the
+    /// Windows console API, which this project does not link. Ctrl-C still
+    /// stops the program, exactly as it did before this type existed.
+    #[cfg(not(unix))]
+    pub fn start() -> Self {
+        Self {
+            quit: Quit::default(),
+        }
+    }
+
     pub fn quit(&self) -> Quit {
         self.quit.clone()
     }
 }
 
+#[cfg(unix)]
 impl Drop for QuitOnKey {
     fn drop(&mut self) {
         if let Some(original) = self.restore {
@@ -130,6 +154,7 @@ impl Drop for QuitOnKey {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn without_a_terminal_nothing_is_touched_and_nothing_quits() {
         // Under a test harness stdin is not a tty, which is also the shape

@@ -89,6 +89,14 @@ Or run the `.msi` from the release page. Either way `d3home` lands on `PATH`,
 and the icon travels inside the executable as a resource, which is how
 Windows carries one.
 
+Windows support is new and two things are missing rather than broken. `q` does
+not stop a `watch` — reading a single key without waiting for Enter needs a
+console API this project does not link, so Ctrl-C is the way — and the pinned
+progress bar is not drawn, for the same reason the size of the window cannot be
+asked for. The device registry is protected by the access control list it
+inherits from your profile directory rather than by an owner-only mode bit,
+which is the platform's own answer and not ours.
+
 ### From source
 
 Rust 1.88 or newer.

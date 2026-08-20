@@ -22,12 +22,29 @@ fn parts() -> (i32, i32, i32, u32) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = now.as_secs() as libc::time_t;
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // `localtime_r` rather than `localtime`: this is called from a thread
-    // that is not the only one running.
-    unsafe { libc::localtime_r(&secs, &mut tm) };
+    let tm = local_tm(now.as_secs() as libc::time_t);
     (tm.tm_hour, tm.tm_min, tm.tm_sec, now.subsec_millis())
+}
+
+/// `localtime_r` rather than `localtime`: this is called from a thread that
+/// is not the only one running.
+#[cfg(unix)]
+fn local_tm(secs: libc::time_t) -> libc::tm {
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // Safety: both pointers are to live locals, and the call only writes
+    // through the second.
+    unsafe { libc::localtime_r(&secs, &mut tm) };
+    tm
+}
+
+/// The same call under the C runtime's own name for it, which takes its
+/// arguments the other way round.
+#[cfg(windows)]
+fn local_tm(secs: libc::time_t) -> libc::tm {
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // Safety: as above.
+    unsafe { libc::localtime_s(&mut tm, &secs) };
+    tm
 }
 
 #[cfg(test)]

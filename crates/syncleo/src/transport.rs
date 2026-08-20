@@ -135,26 +135,30 @@ pub fn socket_addr(
     Ok(SocketAddr::V6(SocketAddrV6::new(v6, port, 0, index)))
 }
 
-/// The one FFI call needed to turn a stable interface name into the OS's
-/// current index for it (`libc::if_nametoindex`, the standard POSIX way to
-/// do this -- see `if_nametoindex(3)`).
+/// Turn a stable interface name into the index the OS currently has for it.
+///
+/// This was `libc::if_nametoindex`, which is the POSIX answer and does not
+/// exist on Windows -- where the same function lives in `iphlpapi` under the
+/// same name, unexposed by the `libc` crate. Asking `if-addrs` instead works
+/// on every platform, costs no new dependency (mDNS discovery already pulls
+/// it in), and needs no `unsafe`.
 fn interface_index(name: &str) -> Result<u32, Error> {
-    let c_name = std::ffi::CString::new(name).map_err(|_| {
-        Error::Io(std::io::Error::other(format!(
-            "interface name {name:?} contains a NUL byte"
-        )))
-    })?;
-    // Safety: `c_name` is a valid, NUL-terminated C string that outlives
-    // the call, per `CString`'s own guarantee; `if_nametoindex` only reads
-    // it and returns a plain integer.
-    let index = unsafe { libc::if_nametoindex(c_name.as_ptr()) };
-    if index == 0 {
-        // The kernel doesn't distinguish "no such interface" from other
-        // failures here beyond errno; std::io::Error::last_os_error()
-        // reports whatever it was (typically ENODEV / ENXIO).
-        return Err(Error::Io(std::io::Error::last_os_error()));
+    let interfaces = if_addrs::get_if_addrs().map_err(Error::Io)?;
+
+    let named = interfaces.iter().find(|interface| interface.name == name);
+    match named {
+        Some(interface) => interface.index.ok_or_else(|| {
+            // A machine can have an interface whose index the OS declines to
+            // report; that is not the same as the interface not being there,
+            // and saying so saves somebody checking a name that is right.
+            Error::Io(std::io::Error::other(format!(
+                "the system reports no index for interface {name:?}"
+            )))
+        }),
+        None => Err(Error::Io(std::io::Error::other(format!(
+            "no interface named {name:?} on this machine"
+        )))),
     }
-    Ok(index)
 }
 
 #[cfg(test)]

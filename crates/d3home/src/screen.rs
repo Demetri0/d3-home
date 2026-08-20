@@ -120,10 +120,20 @@ fn truncate(line: &str, width: usize) -> String {
     out
 }
 
+#[cfg(unix)]
 fn size() -> Option<(u16, u16)> {
     let mut winsize: libc::winsize = unsafe { std::mem::zeroed() };
     let ok = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut winsize) } == 0;
     (ok && winsize.ws_row > 0 && winsize.ws_col > 0).then_some((winsize.ws_row, winsize.ws_col))
+}
+
+/// Windows has no `ioctl`, and asking its console for a size needs an API
+/// this project does not link. Reporting the size as unknown makes the block
+/// behave exactly as it does in a pipe -- it stays out of the way, rather
+/// than drawing at a guessed width and tearing the screen.
+#[cfg(not(unix))]
+fn size() -> Option<(u16, u16)> {
+    None
 }
 
 #[cfg(test)]

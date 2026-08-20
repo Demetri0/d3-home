@@ -36,6 +36,27 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  # A release found that this had never compiled for Windows: the code called
+  # if_nametoindex, which POSIX has and Windows does not. `cargo check` needs
+  # no linker for a foreign target, so the whole class of mistake is caught
+  # here in seconds instead of on a release runner.
+  cross:
+    name: compiles for ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --all-features --target ${{ matrix.target }}
+
   msrv:
     name: minimum supported Rust (1.88)
     runs-on: ubuntu-latest

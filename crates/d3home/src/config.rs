@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::IpAddr;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
@@ -407,10 +408,18 @@ impl Config {
         // worse.
         let existed = parent.exists();
         std::fs::create_dir_all(parent)?;
+        #[cfg(unix)]
         if !existed {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
         }
+        // Windows has no mode bits to set: a file there is protected by the
+        // access control list it inherits from the directory it is in, and
+        // tightening that needs an API this project does not link. The token
+        // is therefore as private as the user's profile directory, which is
+        // the platform's own answer rather than ours.
+        #[cfg(not(unix))]
+        let _ = existed;
 
         let text = toml::to_string_pretty(self).map_err(|e| ConfigError::Parse(e.to_string()))?;
 
@@ -489,12 +498,15 @@ fn create_temp_file(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, st
     for _ in 0..ATTEMPTS {
         let suffix: u64 = rand::random();
         let candidate = dir.join(format!(".{file_name}.tmp-{suffix:016x}"));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&candidate)
-        {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        // Owner-only from the moment it exists, so a token is never briefly
+        // world-readable. See the note in `save` about Windows, which has no
+        // such bit to set.
+        #[cfg(unix)]
+        options.mode(0o600);
+
+        match options.open(&candidate) {
             Ok(file) => return Ok((candidate, file)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -521,6 +533,7 @@ fn create_temp_file(dir: &Path, file_name: &str) -> std::io::Result<(PathBuf, st
 /// This does not refuse to load such a file: a wrong permission bit is a
 /// reason to fix the file, not to break every command against an
 /// otherwise-working config.
+#[cfg(unix)]
 fn warn_if_permissions_are_too_loose(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let Ok(metadata) = std::fs::metadata(path) else {
@@ -530,6 +543,11 @@ fn warn_if_permissions_are_too_loose(path: &Path) {
         crate::output::print_warning(&warning);
     }
 }
+
+/// Windows reports no owner/group/other bits to be too loose about, so
+/// there is nothing here to warn on.
+#[cfg(not(unix))]
+fn warn_if_permissions_are_too_loose(_path: &Path) {}
 
 /// The warning `warn_if_permissions_are_too_loose` prints, or `None` if
 /// `mode`'s owner-only bits (`0600`) are already as tight as `save`
@@ -980,6 +998,7 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
     }
 
     #[test]
+    #[cfg(unix)]
     fn saves_with_owner_only_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -996,6 +1015,7 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
     }
 
     #[test]
+    #[cfg(unix)]
     fn fixes_permissions_on_a_pre_existing_config_file() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1030,6 +1050,7 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
     }
 
     #[test]
+    #[cfg(unix)]
     fn leaves_the_existing_file_untouched_when_the_write_cannot_be_atomic() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1176,6 +1197,7 @@ token = "deadbeefdeadbeefdeadbeefdeadbeef"
         assert!(loose_permission_warning(Path::new("devices.toml"), 0o600).is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_loose_permission_config_still_loads_successfully() {
         // Finding 18: the warning must never turn into a hard failure --
