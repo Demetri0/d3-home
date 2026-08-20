@@ -366,6 +366,13 @@ a stream for a program, not for eyes.
 
 ## Completion
 
+Installed already if you used a package or `make install` — those generate the
+completions by running the program itself, so they cannot describe commands it
+does not have.
+
+After `cargo install`, which installs nothing but the binary, put them in place
+yourself:
+
 ```
 d3home completions fish > ~/.config/fish/completions/d3home.fish
 d3home completions bash > ~/.local/share/bash-completion/completions/d3home
@@ -484,8 +491,24 @@ devices = ["kettle"]      # omit to watch everything configured
 
 [daemon.notify]
 on = ["boiled", "error"]  # the default
+# icon = "weather-clear"  # for every device that names none of its own
 # command = "ntfy publish my-topic \"$D3HOME_BODY\""
 ```
+
+A device can carry its own icon, which is the useful place for it once there
+is more than one kind of thing being watched:
+
+```toml
+[[devices]]
+name = "kettle"
+icon = "/home/you/.local/share/icons/kettle.png"
+```
+
+Either a name from the icon theme or a path. A name is the better answer: it
+survives the file being moved and it follows whatever theme you have chosen.
+Unset, a device uses the daemon's icon; unset there too, it uses `d3home`,
+which is the name the packages install. A name nothing matches costs nothing —
+the notification simply arrives without a picture.
 
 | Event | When |
 | --- | --- |
