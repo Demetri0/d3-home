@@ -27,7 +27,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-14, windows-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -56,7 +56,7 @@ jobs:
     name: compiles for x86_64-apple-darwin
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
@@ -67,7 +67,7 @@ jobs:
     name: minimum supported Rust (1.88)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # The manifests declare rust-version = "1.88". A declared minimum that
       # nobody builds against is a guess, so build against it.
       - uses: dtolnay/rust-toolchain@1.88.0

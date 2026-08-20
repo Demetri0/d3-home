@@ -31,7 +31,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
@@ -78,7 +78,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          dotnet tool install --global wix
+          # Pinned, and not to the newest. WiX v6 introduced the Open Source
+          # Maintenance Fee and v7 refuses to run until its EULA is accepted
+          # ("wix eula accept wix7"), which is a licence decision for the
+          # project's owner to make rather than something a build script
+          # should agree to on their behalf. v5 predates all of it.
+          dotnet tool install --global wix --version 5.0.2
           # The global tools directory is not on PATH inside the step that
           # installed it, only in later ones.
           $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
@@ -88,11 +93,16 @@ jobs:
             -o "dist/d3home-${{ steps.version.outputs.value }}-x86_64.msi"
           Compress-Archive -Path target/release/d3home.exe `
             -DestinationPath "dist/d3home-${{ steps.version.outputs.value }}-${{ matrix.target }}.zip"
-          Get-FileHash dist/* -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
-            Out-File -Encoding ascii "dist/d3home-${{ matrix.target }}.sha256"
+          # Listed and hashed before anything is written, because the
+          # output file lands in the same directory: piping straight into
+          # Out-File made the glob pick up the file being written and fail
+          # on it as locked.
+          $artifacts = Get-ChildItem dist -File
+          $sums = $artifacts | Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" }
+          $sums | Out-File -Encoding ascii "dist/d3home-${{ matrix.target }}.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: dist/*
@@ -104,8 +114,8 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 

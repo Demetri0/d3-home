@@ -667,6 +667,12 @@ One test is marked `#[ignore]` — it needs a real network with working multicas
 | macOS | Homebrew formula, `.app` | [`packaging/homebrew/`](packaging/homebrew/), [`packaging/macos/bundle.sh`](packaging/macos/bundle.sh) |
 | Windows | `.msi`, winget manifest | [`packaging/windows/`](packaging/windows/), [`packaging/winget/`](packaging/winget/) |
 
+The MSI is built with WiX **v5**, pinned. WiX v6 introduced the Open Source
+Maintenance Fee and v7 will not run until its EULA is accepted — `wix eula
+accept wix7`. That is a licence decision for whoever owns the project, not
+something a build script should agree to on their behalf, so the workflow
+stays on the last version that never asks.
+
 Only the `.deb`, `.rpm`, `.msi` and the archives are built by the release
 workflow. The Homebrew formula, the winget manifests and the PKGBUILD are
 recipes for registries that live elsewhere — see [Publishing](#publishing).
