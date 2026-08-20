@@ -1,0 +1,40 @@
+# Maintainer: Demetri0 <briskly-gag-poster@duck.com>
+pkgname=d3home
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Command line for smart home devices on the local network"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Demetri0/d3-home"
+license=('MIT' 'Apache-2.0')
+depends=('gcc-libs')
+makedepends=('cargo' 'make')
+optdepends=('libnotify: desktop notifications from the daemon')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver/$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "d3-home-$pkgver"
+  # Arch's convention: strip the release profile's own settings out of the
+  # way of the distribution's, and never touch the network during build().
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --all-features
+}
+
+check() {
+  cd "d3-home-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --workspace --all-features
+}
+
+package() {
+  cd "d3-home-$pkgver"
+  make install DESTDIR="$pkgdir" PREFIX=/usr
+  install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+}
+
+prepare() {
+  cd "d3-home-$pkgver"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}

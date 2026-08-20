@@ -1,0 +1,7 @@
+# Version manifest. The three files here are what a pull request to
+# microsoft/winget-pkgs contains; InstallerSha256 is filled in at release time.
+PackageIdentifier: Demetri0.d3home
+PackageVersion: 0.1.0
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

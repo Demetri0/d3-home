@@ -20,8 +20,70 @@ syncleo = { path = "../syncleo" }
 thiserror = "1.0"
 toml = "0.8"
 
+# Windows hosts only: this compiles the icon into the executable's resources.
+# See build.rs -- cross-compiling to Windows from elsewhere simply skips it.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
 serde_json = "1.0"
 syncleo = { path = "../syncleo", features = ["simulator"] }
+
+# cargo-deb builds the .deb. Debian's own canon is a debian/ directory driven
+# by dpkg-buildpackage, which is what a Debian *maintainer* would write; this
+# is the upstream form, for a project shipping its own package. Source paths
+# are relative to this manifest, hence the ../../.
+#
+# Run `make completions` first: cargo-deb cannot run the program to make them.
+[package.metadata.deb]
+maintainer = "Demetri0 <briskly-gag-poster@duck.com>"
+copyright = "2026, Demetri0"
+license-file = ["../../LICENSE-MIT", "0"]
+section = "utils"
+priority = "optional"
+extended-description = """
+d3home speaks to smart home devices directly over the local network, with no \
+cloud account and without the vendor's application. Devices are found over \
+mDNS and addressed over UDP; nothing leaves the local network.
+
+The first device it supports is a Polaris PWK 1725CGLD kettle. A background \
+daemon watches the configured devices and sends a desktop notification when \
+one of them boils or reports an error."""
+recommends = "libnotify-bin"
+assets = [
+    ["../../target/release/d3home", "usr/bin/", "755"],
+    ["../../packaging/d3home.1", "usr/share/man/man1/", "644"],
+    ["../../packaging/d3home.desktop", "usr/share/applications/", "644"],
+    ["../../assets/icons/hicolor/16x16/apps/d3home.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
+    ["../../assets/icons/hicolor/24x24/apps/d3home.png", "usr/share/icons/hicolor/24x24/apps/", "644"],
+    ["../../assets/icons/hicolor/32x32/apps/d3home.png", "usr/share/icons/hicolor/32x32/apps/", "644"],
+    ["../../assets/icons/hicolor/48x48/apps/d3home.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
+    ["../../assets/icons/hicolor/64x64/apps/d3home.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
+    ["../../assets/icons/hicolor/128x128/apps/d3home.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+    ["../../assets/icons/hicolor/256x256/apps/d3home.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["../../assets/icons/d3home.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+    ["../../target/release/completions/d3home.bash", "usr/share/bash-completion/completions/d3home", "644"],
+    ["../../target/release/completions/_d3home", "usr/share/zsh/site-functions/_d3home", "644"],
+    ["../../target/release/completions/d3home.fish", "usr/share/fish/vendor_completions.d/d3home.fish", "644"],
+    ["../../README.md", "usr/share/doc/d3home/README.md", "644"],
+    ["../../docs/protocol.md", "usr/share/doc/d3home/protocol.md", "644"],
+    ["../../LICENSE-APACHE", "usr/share/doc/d3home/LICENSE-APACHE", "644"],
+    ["../../contrib/*", "usr/share/doc/d3home/contrib/", "644"],
+]
+
+[package.metadata.generate-rpm]
+# For distributions that would rather build the binary elsewhere and package
+# it here. The .spec in packaging/rpm/ is the one that builds from source and
+# is what a distribution maintainer would start from.
+assets = [
+    { source = "../../target/release/d3home", dest = "/usr/bin/d3home", mode = "755" },
+    { source = "../../packaging/d3home.1", dest = "/usr/share/man/man1/d3home.1", mode = "644", doc = true },
+    { source = "../../packaging/d3home.desktop", dest = "/usr/share/applications/d3home.desktop", mode = "644" },
+    { source = "../../assets/icons/hicolor/*/apps/d3home.png", dest = "/usr/share/icons/hicolor/", mode = "644" },
+    { source = "../../assets/icons/d3home.png", dest = "/usr/share/icons/hicolor/512x512/apps/d3home.png", mode = "644" },
+    { source = "../../README.md", dest = "/usr/share/doc/d3home/README.md", mode = "644", doc = true },
+    { source = "../../LICENSE-MIT", dest = "/usr/share/doc/d3home/LICENSE-MIT", mode = "644", doc = true },
+    { source = "../../LICENSE-APACHE", dest = "/usr/share/doc/d3home/LICENSE-APACHE", mode = "644", doc = true },
+]

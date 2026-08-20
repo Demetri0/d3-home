@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSI for WiX v4/v5:
+
+    wix build packaging/windows/d3home.wxs -d BinDir=target/release -o d3home.msi
+
+  Windows has no shared icon directory and no man pages, so the package is
+  the executable, its PATH entry, and nothing else: the icon already travels
+  inside the .exe as a resource, put there by build.rs.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="d3home"
+           Manufacturer="Demetri0"
+           Version="0.1.0"
+           UpgradeCode="24652DFA-AE10-55BF-A45F-24C40F31C449"
+           Scope="perMachine">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of d3home is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="d3home" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="ProgramFiles" Directory="INSTALLFOLDER">
+      <Component>
+        <File Id="d3homeExe" Source="!(bindpath.Bin)\d3home.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="PathEntry" Guid="*">
+        <!-- A command line tool nobody can type is no use; this is what an
+             installer is for on a platform with no /usr/local/bin. -->
+        <Environment Id="UpdatePath" Name="PATH" Value="[INSTALLFOLDER]"
+                     Permanent="no" Part="last" Action="set" System="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="d3home" Level="1">
+      <ComponentGroupRef Id="ProgramFiles" />
+    </Feature>
+  </Package>
+</Wix>

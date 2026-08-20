@@ -1,0 +1,25 @@
+PackageIdentifier: Demetri0.d3home
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: Demetri0
+PublisherUrl: https://github.com/Demetri0
+PackageName: d3home
+PackageUrl: https://github.com/Demetri0/d3-home
+License: MIT OR Apache-2.0
+LicenseUrl: https://github.com/Demetri0/d3-home/blob/main/LICENSE-MIT
+ShortDescription: Command line for smart home devices on the local network
+Description: |-
+  d3home speaks to smart home devices directly over the local network, with no
+  cloud account and without the vendor's application. Devices are found over
+  mDNS and addressed over UDP; nothing leaves the local network.
+
+  The first device it supports is a Polaris PWK 1725CGLD kettle. A background
+  daemon watches the configured devices and shows a notification when one of
+  them boils or reports an error.
+Tags:
+  - cli
+  - smart-home
+  - iot
+  - kettle
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
