@@ -60,14 +60,18 @@ jobs:
           mkdir -p dist
           tar -czf "dist/d3home-${{ steps.version.outputs.value }}-${{ matrix.target }}.tar.gz" \
             -C target/release d3home
-          shasum -a 256 dist/*.tar.gz > "dist/d3home-${{ matrix.target }}.sha256"
+          # From inside dist, so the file records a bare name. Run from
+          # outside it, shasum writes the path it was given -- "dist/x.tar.gz"
+          # -- and `sha256sum -c` then looks for a dist directory that
+          # nobody downloading a release will have.
+          (cd dist && shasum -a 256 *.tar.gz > "d3home-${{ matrix.target }}.sha256")
 
       - name: Debian package
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           cargo install cargo-deb --locked
           cargo deb --no-build --no-strip -p d3home -o dist/
-          shasum -a 256 dist/*.deb >> "dist/d3home-${{ matrix.target }}.sha256"
+          (cd dist && shasum -a 256 *.deb >> "d3home-${{ matrix.target }}.sha256")
 
       - name: Application bundle (macOS)
         if: runner.os == 'macOS'
@@ -76,7 +80,7 @@ jobs:
           ditto -c -k --keepParent dist/d3home.app \
             "dist/d3home-${{ steps.version.outputs.value }}-${{ matrix.target }}.app.zip"
           rm -rf dist/d3home.app
-          shasum -a 256 dist/*.app.zip >> "dist/d3home-${{ matrix.target }}.sha256"
+          (cd dist && shasum -a 256 *.app.zip >> "d3home-${{ matrix.target }}.sha256")
 
       - name: Installer (Windows)
         if: runner.os == 'Windows'
@@ -95,6 +99,10 @@ jobs:
           wix build packaging/windows/d3home.wxs `
             -bindpath Bin=target/release `
             -o "dist/d3home-${{ steps.version.outputs.value }}-x86_64.msi"
+          # wix leaves its own debug symbols beside the installer. They are
+          # for debugging a build of the installer, not for anyone
+          # installing the program, and they were being published.
+          Remove-Item dist/*.wixpdb -ErrorAction SilentlyContinue
           Compress-Archive -Path target/release/d3home.exe `
             -DestinationPath "dist/d3home-${{ steps.version.outputs.value }}-${{ matrix.target }}.zip"
           # Listed and hashed before anything is written, because the
