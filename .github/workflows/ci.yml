@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
+        os: [ubuntu-latest, macos-26, windows-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -49,9 +49,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  # The one target nothing above runs on: an Intel Mac. `cargo check` needs no
-  # linker for a foreign target, so this costs seconds and still catches code
-  # that could never compile there.
+  # No release binary is built for an Intel Mac any more, but people still own
+  # them and can build from source. `cargo check` needs no linker for a foreign
+  # target, so keeping that true costs seconds rather than a runner.
   cross:
     name: compiles for x86_64-apple-darwin
     runs-on: ubuntu-latest

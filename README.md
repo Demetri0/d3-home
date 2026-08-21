@@ -55,6 +55,11 @@ and [Publishing](#publishing) is what it takes to open them.
 Each `v*` tag builds a package for every platform and attaches them to the
 GitHub release page, with a `SHA256SUMS` file beside them.
 
+The macOS build is Apple silicon only. GitHub has withdrawn the Intel runner
+this used to be built on, and the image that replaced it is announced as the
+last x86_64 macOS runner there will ever be. An Intel Mac still builds from
+source, and CI checks that it compiles.
+
 ```bash
 sudo dpkg -i d3home_0.1.0_amd64.deb          # Debian, Ubuntu
 sudo rpm -i d3home-0.1.0-1.x86_64.rpm        # Fedora, openSUSE, RHEL

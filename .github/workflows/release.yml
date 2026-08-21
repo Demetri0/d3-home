@@ -24,10 +24,14 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-14
+          # Apple silicon only. macos-13 was removed outright -- a run
+          # requesting it waits forever for a machine that no longer exists
+          # -- and macos-14 is deprecated behind it. The Intel image that
+          # replaces them, macos-15-intel, is announced as the last x86_64
+          # macOS runner there will ever be, so building on it would buy a
+          # binary with an expiry date on it.
+          - os: macos-26
             target: aarch64-apple-darwin
-          - os: macos-13
-            target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
