@@ -413,9 +413,9 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "mdns-sd"
-version = "0.21.0"
+version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba97b4c886eea3c2823388120d92063c011ac866919ffc4200a0e4b1642a54a5"
+checksum = "127d3355da0615643c88c885e29a1ccb29ca4b1ca1f2e44b3caed2e728a796aa"
 dependencies = [
  "fastrand",
  "flume",
